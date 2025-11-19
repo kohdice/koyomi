@@ -13,3 +13,6 @@ repository = "https://github.com/kohdice/koyomi"
 [workspace.dependencies]
 # local crates
 koyomi-core = { path = "./crates/koyomi-core" }
+
+# non-local crates
+anyhow = "1.0.100"
