@@ -1,19 +1,15 @@
 name: CI
-
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-
 jobs:
   rustfmt:
     name: Format Check
@@ -21,23 +17,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Rust toolchain
         run: rustup show
-
       - name: Check formatting
         run: cargo fmt --all -- --check
-
   clippy:
     name: Clippy Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Rust toolchain
         run: rustup show
-
       - name: Cache cargo dependencies
         uses: actions/cache@v4
         with:
@@ -50,10 +41,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     needs: [rustfmt, clippy]
@@ -65,10 +54,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Rust toolchain
         run: rustup show
-
       - name: Cache cargo dependencies
         uses: actions/cache@v4
         with:
@@ -81,9 +68,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-
       - name: Build
         run: cargo build --workspace --all-targets
-
       - name: Run tests
         run: cargo test --workspace --all-targets
