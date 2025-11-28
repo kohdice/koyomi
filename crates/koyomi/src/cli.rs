@@ -14,5 +14,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Point,
+    /// Log in to a Google account
+    Login,
+    /// Log out of a Google account
+    Logout,
 }
