@@ -6,9 +6,12 @@ use chrono::Utc;
 use crate::{Error, Result, config};
 
 /// Execute the OAuth2 device authorization flow
-pub async fn login() -> Result<()> {
+pub async fn login(verbose: u8) -> Result<()> {
     // 1. Load client configuration
     let secret = config::load()?;
+    if verbose >= 1 {
+        println!("Loaded OAuth2 client configuration.");
+    }
 
     let client = reqwest::Client::new();
 
@@ -65,19 +68,23 @@ pub async fn login() -> Result<()> {
 
     println!();
     println!("Successfully logged in!");
-    println!("Token saved to ~/.config/koyomi/google_tokens.json");
+    if verbose >= 1 {
+        println!("Token saved to ~/.config/koyomi/google_tokens.json");
+    }
 
     Ok(())
 }
 
 /// Remove stored tokens
-pub async fn logout() -> Result<()> {
+pub async fn logout(verbose: u8) -> Result<()> {
     // Check if token exists first
     match token::load() {
         Ok(_) => {
             token::delete()?;
             println!("Successfully logged out.");
-            println!("Token file has been removed.");
+            if verbose >= 1 {
+                println!("Token file has been removed.");
+            }
         }
         Err(Error::TokenNotFound) => {
             println!("Not currently logged in.");
