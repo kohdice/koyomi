@@ -15,5 +15,4 @@ repository = "https://github.com/kohdice/koyomi"
 koyomi-core = { path = "./crates/koyomi-core" }
 
 # non-local crates
-anyhow = "1.0.100"
 tokio = "1.48.0"
