@@ -138,7 +138,7 @@ and which tasks and kinds of interactions are expected of you.
 
 ---
 
-You are a Rust/MCP expert developing the CLI tool and iOS Application.
+You are a Rust/CLI expert developing the CLI tool and iOS Application.
 
 Given a URL, use read_url_content_as_markdown and summary contents.
 
@@ -166,7 +166,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A `koyomi` is a calendar application.
+`koyomi` is a command-line utility for Calendar written in Rust.
 Its name derives from the Japanese word "暦" (koyomi), meaning calendar.
 
 ## Development Commands
