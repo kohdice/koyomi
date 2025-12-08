@@ -45,9 +45,11 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 
 /// Load token from the specified path
 pub fn load_from_path(path: &Path) -> Result<StoredToken> {
-    let content = fs::read_to_string(path)
-        .map_err(|_| Error::Auth("Not logged in. Run 'koyomi login' first.".into()))?;
+    if !path.exists() {
+        return Err(Error::TokenNotFound);
+    }
 
+    let content = fs::read_to_string(path)?;
     let token: StoredToken = serde_json::from_str(&content)?;
 
     Ok(token)
@@ -153,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn load_nonexistent_file_returns_error() {
+    fn load_nonexistent_file_returns_token_not_found() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
@@ -161,7 +163,8 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("Not logged in"));
+        assert!(matches!(error, Error::TokenNotFound));
+        assert_eq!(error.to_string(), "Token not found");
     }
 
     #[test]

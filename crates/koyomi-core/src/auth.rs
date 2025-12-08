@@ -79,7 +79,7 @@ pub async fn logout() -> Result<()> {
             println!("Successfully logged out.");
             println!("Token file has been removed.");
         }
-        Err(Error::Auth(_)) => {
+        Err(Error::TokenNotFound) => {
             println!("Not currently logged in.");
         }
         Err(e) => {
