@@ -9,11 +9,11 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Login => {
-            koyomi_core::login().await?;
+            koyomi_core::login(cli.verbose).await?;
             Ok(())
         }
         Commands::Logout => {
-            koyomi_core::logout().await?;
+            koyomi_core::logout(cli.verbose).await?;
             Ok(())
         }
     }
