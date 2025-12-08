@@ -52,9 +52,11 @@ pub struct TokenErrorResponse {
 
 /// Start the device authorization flow
 /// Returns a DeviceCodeResponse containing user_code and verification_url
-pub async fn start(client_id: &str, device_code_url: &str) -> Result<DeviceCodeResponse> {
-    let client = reqwest::Client::new();
-
+pub async fn start(
+    client: &reqwest::Client,
+    client_id: &str,
+    device_code_url: &str,
+) -> Result<DeviceCodeResponse> {
     let response = client
         .post(device_code_url)
         .form(&DeviceCodeRequest { client_id, scope: SCOPES })
@@ -89,12 +91,12 @@ impl Default for PollConfig {
 
 /// Poll for token after user authorization
 pub async fn poll(
+    client: &reqwest::Client,
     client_id: &str,
     client_secret: &str,
     device_code: &str,
     config: &PollConfig,
 ) -> Result<TokenResponse> {
-    let client = reqwest::Client::new();
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(config.expires_in);
     let mut interval = config.initial_interval;
@@ -176,8 +178,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let url = format!("{}/device/code", mock_server.uri());
-        let result = start("test-client-id", &url).await;
+        let result = start(&client, "test-client-id", &url).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -201,8 +204,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let url = format!("{}/device/code", mock_server.uri());
-        let result = start("invalid-client-id", &url).await;
+        let result = start(&client, "invalid-client-id", &url).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -229,13 +233,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let config = PollConfig {
             token_url: format!("{}/token", mock_server.uri()),
             initial_interval: 1,
             expires_in: 60,
         };
 
-        let result = poll("client-id", "client-secret", "device-code", &config).await;
+        let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
         assert!(result.is_ok());
         let token = result.unwrap();
@@ -273,13 +278,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let config = PollConfig {
             token_url: format!("{}/token", mock_server.uri()),
             initial_interval: 1,
             expires_in: 60,
         };
 
-        let result = poll("client-id", "client-secret", "device-code", &config).await;
+        let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
         assert!(result.is_ok());
     }
@@ -299,13 +305,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let config = PollConfig {
             token_url: format!("{}/token", mock_server.uri()),
             initial_interval: 1,
             expires_in: 60,
         };
 
-        let result = poll("client-id", "client-secret", "device-code", &config).await;
+        let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -327,13 +334,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let config = PollConfig {
             token_url: format!("{}/token", mock_server.uri()),
             initial_interval: 1,
             expires_in: 60,
         };
 
-        let result = poll("client-id", "client-secret", "device-code", &config).await;
+        let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -369,13 +377,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        let client = reqwest::Client::new();
         let config = PollConfig {
             token_url: format!("{}/token", mock_server.uri()),
             initial_interval: 1,
             expires_in: 60,
         };
 
-        let result = poll("client-id", "client-secret", "device-code", &config).await;
+        let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
         assert!(result.is_ok());
     }

@@ -9,11 +9,13 @@ use crate::{Error, Result, config};
 pub async fn login() -> Result<()> {
     // 1. Load client configuration
     let secret = config::load()?;
-    println!("Loaded OAuth2 client configuration.");
+
+    let client = reqwest::Client::new();
 
     // 2. Get device code
     let device_response =
-        device_flow::start(&secret.installed.client_id, device_flow::DEVICE_CODE_URL).await?;
+        device_flow::start(&client, &secret.installed.client_id, device_flow::DEVICE_CODE_URL)
+            .await?;
 
     // 3. Show instructions to user
     println!();
@@ -37,6 +39,7 @@ pub async fn login() -> Result<()> {
     };
 
     let token_response = device_flow::poll(
+        &client,
         &secret.installed.client_id,
         &secret.installed.client_secret,
         &device_response.device_code,
