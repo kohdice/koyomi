@@ -8,6 +8,9 @@ pub enum Error {
     #[error("Authentication error: {0}")]
     Auth(String),
 
+    #[error("Token not found")]
+    TokenNotFound,
+
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
@@ -48,5 +51,22 @@ mod tests {
         let json_error = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
         let error: Error = json_error.into();
         assert!(error.to_string().starts_with("JSON error:"));
+    }
+
+    #[test]
+    fn token_not_found_error_displays_message() {
+        let error = Error::TokenNotFound;
+        assert_eq!(error.to_string(), "Token not found");
+    }
+
+    #[test]
+    fn token_not_found_is_distinct_from_auth() {
+        let auth_error = Error::Auth("some auth error".to_string());
+        let token_not_found = Error::TokenNotFound;
+
+        // These should be different error types
+        assert!(matches!(auth_error, Error::Auth(_)));
+        assert!(matches!(token_not_found, Error::TokenNotFound));
+        assert!(!matches!(token_not_found, Error::Auth(_)));
     }
 }
