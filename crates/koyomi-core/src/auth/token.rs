@@ -3,9 +3,11 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::{Error, Result, config};
 
+/// Token storage filename
 const TOKEN_FILE: &str = "google_tokens.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,15 +22,12 @@ pub struct StoredToken {
 
 /// Save token to the specified path
 pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
-    // Create parent directory if it doesn't exist
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    // Convert to JSON (pretty printed)
     let content = serde_json::to_string_pretty(token)?;
 
-    // Write file
     fs::write(path, &content)?;
 
     // Set permissions to 0600 (owner read/write only) on Unix
@@ -67,7 +66,9 @@ pub fn delete_path(path: &Path) -> Result<()> {
 /// Save token to ~/.config/koyomi/google_tokens.json
 pub fn save(token: &StoredToken) -> Result<()> {
     let path = config::config_dir()?.join(TOKEN_FILE);
-    save_to_path(token, &path)
+    save_to_path(token, &path)?;
+    info!("Token saved to {}", path.display());
+    Ok(())
 }
 
 /// Load token from ~/.config/koyomi/google_tokens.json
@@ -109,11 +110,9 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        // Save
         let result = save_to_path(&token, &path);
         assert!(result.is_ok());
 
-        // Load
         let loaded = load_from_path(&path);
         assert!(loaded.is_ok());
 
@@ -130,17 +129,11 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        // Save first
         save_to_path(&token, &path).unwrap();
-
-        // Verify file exists
         assert!(path.exists());
 
-        // Delete
         let result = delete_path(&path);
         assert!(result.is_ok());
-
-        // Verify file is gone
         assert!(!path.exists());
     }
 
@@ -149,7 +142,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
-        // Delete when file doesn't exist should succeed
         let result = delete_path(&path);
         assert!(result.is_ok());
     }
