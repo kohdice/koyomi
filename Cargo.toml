@@ -16,3 +16,4 @@ koyomi-core = { path = "./crates/koyomi-core" }
 
 # non-local crates
 tokio = "1.48.0"
+tracing = "0.1.43"

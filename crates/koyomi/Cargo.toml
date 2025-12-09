@@ -16,3 +16,5 @@ anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive"] }
 koyomi-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
