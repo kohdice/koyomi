@@ -7,10 +7,9 @@ use tracing::info;
 
 use crate::{Error, Result, config};
 
-/// Token storage filename
 const TOKEN_FILE: &str = "google_tokens.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredToken {
     pub access_token: String,
     pub refresh_token: Option<String>,

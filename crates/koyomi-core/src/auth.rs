@@ -47,7 +47,9 @@ pub async fn login() -> Result<()> {
     .await?;
 
     let now = Utc::now();
-    let expires_at = now + chrono::Duration::seconds(token_response.expires_in as i64);
+    let expires_in_secs = i64::try_from(token_response.expires_in)
+        .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
+    let expires_at = now + chrono::Duration::seconds(expires_in_secs);
 
     let stored_token = token::StoredToken {
         access_token: token_response.access_token,

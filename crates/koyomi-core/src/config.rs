@@ -4,10 +4,7 @@ use serde::Deserialize;
 
 use crate::{Error, Result};
 
-/// Application name used for config directory
 const CONFIG_DIR: &str = "koyomi";
-
-/// Client secret configuration filename
 const CLIENT_SECRET_FILE: &str = "client_secret.json";
 
 /// Get the koyomi config directory (~/.config/koyomi)
@@ -40,7 +37,7 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     })?;
 
     let secret: ClientSecretFile = serde_json::from_str(&content)
-        .map_err(|e| Error::Config(format!("Invalid {} format: {}", CLIENT_SECRET_FILE, e)))?;
+        .map_err(|e| Error::Config(format!("Invalid {CLIENT_SECRET_FILE} format: {e}")))?;
 
     if secret.installed.client_id.is_empty() {
         return Err(Error::Config("client_id is missing or empty".into()));

@@ -75,7 +75,6 @@ pub async fn start(
     Ok(response.json().await?)
 }
 
-/// Poll configuration for testing
 #[derive(Debug, Clone)]
 pub struct PollConfig {
     pub token_url: String,
@@ -97,6 +96,8 @@ pub async fn poll(
     device_code: &str,
     config: &PollConfig,
 ) -> Result<TokenResponse> {
+    // Use std::time::Instant for real wall-clock timeout measurement
+    // This ensures timeout works correctly even in tests with tokio::time::pause()
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(config.expires_in);
     let mut interval = config.initial_interval;
@@ -106,7 +107,7 @@ pub async fn poll(
             return Err(Error::Auth("Authorization timed out. Please try again.".into()));
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
 
         let response = client
             .post(&config.token_url)
