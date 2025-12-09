@@ -102,12 +102,10 @@ pub async fn poll(
     let mut interval = config.initial_interval;
 
     loop {
-        // Check timeout
         if start_time.elapsed() >= timeout {
             return Err(Error::Auth("Authorization timed out. Please try again.".into()));
         }
 
-        // Wait for interval
         tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
 
         let response = client
@@ -116,18 +114,12 @@ pub async fn poll(
             .send()
             .await?;
 
-        // Get response body as text for multiple parse attempts
         let body = response.text().await?;
 
-        // First try to parse as error response
         if let Ok(error) = serde_json::from_str::<TokenErrorResponse>(&body) {
             match error.error.as_str() {
-                "authorization_pending" => {
-                    // User hasn't authorized yet - continue polling
-                    continue;
-                }
+                "authorization_pending" => continue,
                 "slow_down" => {
-                    // Reduce polling frequency
                     interval += 5;
                     continue;
                 }
@@ -149,7 +141,6 @@ pub async fn poll(
             }
         }
 
-        // Parse as success response
         let token: TokenResponse = serde_json::from_str(&body)?;
         return Ok(token);
     }
@@ -216,7 +207,6 @@ mod tests {
 
     #[tokio::test]
     async fn poll_returns_token_on_success() {
-        // Pause time for testing
         tokio::time::pause();
 
         let mock_server = MockServer::start().await;
@@ -255,7 +245,6 @@ mod tests {
 
         let mock_server = MockServer::start().await;
 
-        // First two requests return pending, third returns success
         Mock::given(method("POST"))
             .and(path("/token"))
             .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
@@ -354,7 +343,6 @@ mod tests {
 
         let mock_server = MockServer::start().await;
 
-        // First request returns slow_down, second returns success
         Mock::given(method("POST"))
             .and(path("/token"))
             .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
