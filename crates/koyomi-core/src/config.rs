@@ -4,12 +4,18 @@ use serde::Deserialize;
 
 use crate::{Error, Result};
 
+/// Application name used for config directory
+const CONFIG_DIR: &str = "koyomi";
+
+/// Client secret configuration filename
+const CLIENT_SECRET_FILE: &str = "client_secret.json";
+
 /// Get the koyomi config directory (~/.config/koyomi)
 pub fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("Could not determine home directory".into()))?;
 
-    Ok(home.join(".config").join("koyomi"))
+    Ok(home.join(".config").join(CONFIG_DIR))
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,9 +40,8 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     })?;
 
     let secret: ClientSecretFile = serde_json::from_str(&content)
-        .map_err(|e| Error::Config(format!("Invalid client_secret.json format: {}", e)))?;
+        .map_err(|e| Error::Config(format!("Invalid {} format: {}", CLIENT_SECRET_FILE, e)))?;
 
-    // Validation
     if secret.installed.client_id.is_empty() {
         return Err(Error::Config("client_id is missing or empty".into()));
     }
@@ -49,7 +54,7 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
 
 /// Load client secret from ~/.config/koyomi/client_secret.json
 pub fn load() -> Result<ClientSecretFile> {
-    let path = config_dir()?.join("client_secret.json");
+    let path = config_dir()?.join(CLIENT_SECRET_FILE);
     load_from_path(&path)
 }
 
@@ -59,7 +64,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_config(dir: &TempDir, content: &str) -> std::path::PathBuf {
-        let path = dir.path().join("client_secret.json");
+        let path = dir.path().join(CLIENT_SECRET_FILE);
         std::fs::write(&path, content).unwrap();
         path
     }
