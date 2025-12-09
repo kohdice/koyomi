@@ -7,7 +7,11 @@ use crate::{Error, Result};
 const CONFIG_DIR: &str = "koyomi";
 const CLIENT_SECRET_FILE: &str = "client_secret.json";
 
-/// Get the koyomi config directory (~/.config/koyomi)
+/// Get the koyomi config directory (`~/.config/koyomi`)
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined.
 pub fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("Could not determine home directory".into()))?;
@@ -27,6 +31,13 @@ pub struct ClientSecretInstalled {
 }
 
 /// Load client secret from the specified path
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file cannot be read
+/// - The JSON format is invalid
+/// - `client_id` or `client_secret` is missing or empty
 pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         Error::Config(format!(
@@ -49,7 +60,15 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     Ok(secret)
 }
 
-/// Load client secret from ~/.config/koyomi/client_secret.json
+/// Load client secret from `~/.config/koyomi/client_secret.json`
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The config directory cannot be determined
+/// - The file cannot be read
+/// - The JSON format is invalid
+/// - `client_id` or `client_secret` is missing or empty
 pub fn load() -> Result<ClientSecretFile> {
     let path = config_dir()?.join(CLIENT_SECRET_FILE);
     load_from_path(&path)

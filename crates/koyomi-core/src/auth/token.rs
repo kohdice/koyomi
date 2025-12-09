@@ -20,6 +20,13 @@ pub struct StoredToken {
 }
 
 /// Save token to the specified path
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The parent directory cannot be created
+/// - The file cannot be written
+/// - File permissions cannot be set (Unix only)
 pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -42,6 +49,13 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 }
 
 /// Load token from the specified path
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file does not exist ([`Error::TokenNotFound`])
+/// - The file cannot be read
+/// - The JSON format is invalid
 pub fn load_from_path(path: &Path) -> Result<StoredToken> {
     if !path.exists() {
         return Err(Error::TokenNotFound);
@@ -54,6 +68,10 @@ pub fn load_from_path(path: &Path) -> Result<StoredToken> {
 }
 
 /// Delete token at the specified path
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be removed.
 pub fn delete_path(path: &Path) -> Result<()> {
     if path.exists() {
         fs::remove_file(path)?;
@@ -62,7 +80,15 @@ pub fn delete_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Save token to ~/.config/koyomi/google_tokens.json
+/// Save token to `~/.config/koyomi/google_tokens.json`
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The config directory cannot be determined
+/// - The parent directory cannot be created
+/// - The file cannot be written
+/// - File permissions cannot be set (Unix only)
 pub fn save(token: &StoredToken) -> Result<()> {
     let path = config::config_dir()?.join(TOKEN_FILE);
     save_to_path(token, &path)?;
@@ -70,13 +96,27 @@ pub fn save(token: &StoredToken) -> Result<()> {
     Ok(())
 }
 
-/// Load token from ~/.config/koyomi/google_tokens.json
+/// Load token from `~/.config/koyomi/google_tokens.json`
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The config directory cannot be determined
+/// - The file does not exist ([`Error::TokenNotFound`])
+/// - The file cannot be read
+/// - The JSON format is invalid
 pub fn load() -> Result<StoredToken> {
     let path = config::config_dir()?.join(TOKEN_FILE);
     load_from_path(&path)
 }
 
-/// Delete token from ~/.config/koyomi/google_tokens.json
+/// Delete token from `~/.config/koyomi/google_tokens.json`
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The config directory cannot be determined
+/// - The file exists but cannot be removed
 pub fn delete() -> Result<()> {
     let path = config::config_dir()?.join(TOKEN_FILE);
     delete_path(&path)

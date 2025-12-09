@@ -51,7 +51,14 @@ pub struct TokenErrorResponse {
 }
 
 /// Start the device authorization flow
-/// Returns a DeviceCodeResponse containing user_code and verification_url
+///
+/// Returns a [`DeviceCodeResponse`] containing `user_code` and `verification_url`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The HTTP request fails
+/// - The server returns an error response
 pub async fn start(
     client: &reqwest::Client,
     client_id: &str,
@@ -89,6 +96,14 @@ impl Default for PollConfig {
 }
 
 /// Poll for token after user authorization
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The authorization times out
+/// - The user denies access
+/// - The device code expires
+/// - The HTTP request fails
 pub async fn poll(
     client: &reqwest::Client,
     client_id: &str,

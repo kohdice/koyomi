@@ -7,6 +7,14 @@ use tracing::{debug, info, warn};
 use crate::{Error, Result, config};
 
 /// Execute the OAuth2 device authorization flow
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The client secret configuration cannot be loaded
+/// - The device code request fails
+/// - Token polling times out or is denied
+/// - The token cannot be saved
 pub async fn login() -> Result<()> {
     let secret = config::load()?;
     info!("Loaded OAuth2 client configuration");
@@ -69,6 +77,10 @@ pub async fn login() -> Result<()> {
 }
 
 /// Remove stored tokens
+///
+/// # Errors
+///
+/// Returns an error if the token file exists but cannot be deleted.
 pub async fn logout() -> Result<()> {
     match token::load() {
         Ok(_) => {

@@ -22,6 +22,11 @@ fn init_tracing(verbose: u8) {
         .init();
 }
 
+/// Run the CLI application
+///
+/// # Errors
+///
+/// Returns an error if any subcommand fails.
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
