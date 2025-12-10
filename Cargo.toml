@@ -15,5 +15,8 @@ repository = "https://github.com/kohdice/koyomi"
 koyomi-core = { path = "./crates/koyomi-core" }
 
 # non-local crates
+reqwest = { version = "0.12.24", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 tokio = "1.48.0"
 tracing = "0.1.43"
