@@ -19,6 +19,9 @@ pub enum Error {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Calendar API error: {0}")]
+    Calendar(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -68,5 +71,21 @@ mod tests {
         assert!(matches!(auth_error, Error::Auth(_)));
         assert!(matches!(token_not_found, Error::TokenNotFound));
         assert!(!matches!(token_not_found, Error::Auth(_)));
+    }
+
+    #[test]
+    fn calendar_error_displays_message() {
+        let error = Error::Calendar("test calendar error".to_string());
+        assert_eq!(error.to_string(), "Calendar API error: test calendar error");
+    }
+
+    #[test]
+    fn calendar_error_is_distinct_from_auth() {
+        let auth_error = Error::Auth("some auth error".to_string());
+        let calendar_error = Error::Calendar("calendar error".to_string());
+
+        assert!(matches!(auth_error, Error::Auth(_)));
+        assert!(matches!(calendar_error, Error::Calendar(_)));
+        assert!(!matches!(calendar_error, Error::Auth(_)));
     }
 }
