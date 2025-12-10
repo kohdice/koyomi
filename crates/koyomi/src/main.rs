@@ -1,3 +1,4 @@
-fn main() -> anyhow::Result<()> {
-    koyomi::run()
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    koyomi::run().await
 }
