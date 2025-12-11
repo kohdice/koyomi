@@ -11,7 +11,7 @@ pub struct CalendarEventsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub summary: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<EventStatus>,
     pub organizer: Option<Organizer>,
     pub location: Option<String>,
     pub start: Option<EventDateTime>,
@@ -53,7 +53,7 @@ pub struct Attendee {
     #[serde(rename = "displayName")]
     pub display_name: Option<String>,
     #[serde(rename = "responseStatus")]
-    pub response_status: Option<String>,
+    pub response_status: Option<ResponseStatus>,
 }
 
 /// Reminder settings for an event
@@ -95,6 +95,44 @@ pub struct ConferenceSolution {
     pub name: String,
 }
 
+/// Event status indicating whether the event is confirmed, tentative, or cancelled
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventStatus {
+    /// The event is confirmed
+    Confirmed,
+    /// The event is tentatively confirmed
+    Tentative,
+    /// The event is cancelled
+    Cancelled,
+}
+
+impl EventStatus {
+    /// Returns the status as a lowercase string
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventStatus::Confirmed => "confirmed",
+            EventStatus::Tentative => "tentative",
+            EventStatus::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Attendee's response status to an event invitation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResponseStatus {
+    /// The attendee has not responded
+    NeedsAction,
+    /// The attendee has declined the invitation
+    Declined,
+    /// The attendee has tentatively accepted
+    Tentative,
+    /// The attendee has accepted the invitation
+    Accepted,
+}
+
 /// Time period for event listing
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPeriod {
@@ -115,6 +153,57 @@ mod tests {
     fn event_period_default_is_day() {
         let period = EventPeriod::default();
         assert_eq!(period, EventPeriod::Day);
+    }
+
+    #[test]
+    fn event_status_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&EventStatus::Confirmed).unwrap(), "\"confirmed\"");
+        assert_eq!(serde_json::to_string(&EventStatus::Tentative).unwrap(), "\"tentative\"");
+        assert_eq!(serde_json::to_string(&EventStatus::Cancelled).unwrap(), "\"cancelled\"");
+    }
+
+    #[test]
+    fn event_status_deserializes_lowercase() {
+        assert_eq!(
+            serde_json::from_str::<EventStatus>("\"confirmed\"").unwrap(),
+            EventStatus::Confirmed
+        );
+        assert_eq!(
+            serde_json::from_str::<EventStatus>("\"tentative\"").unwrap(),
+            EventStatus::Tentative
+        );
+        assert_eq!(
+            serde_json::from_str::<EventStatus>("\"cancelled\"").unwrap(),
+            EventStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn response_status_serializes_camel_case() {
+        assert_eq!(serde_json::to_string(&ResponseStatus::NeedsAction).unwrap(), "\"needsAction\"");
+        assert_eq!(serde_json::to_string(&ResponseStatus::Declined).unwrap(), "\"declined\"");
+        assert_eq!(serde_json::to_string(&ResponseStatus::Tentative).unwrap(), "\"tentative\"");
+        assert_eq!(serde_json::to_string(&ResponseStatus::Accepted).unwrap(), "\"accepted\"");
+    }
+
+    #[test]
+    fn response_status_deserializes_camel_case() {
+        assert_eq!(
+            serde_json::from_str::<ResponseStatus>("\"needsAction\"").unwrap(),
+            ResponseStatus::NeedsAction
+        );
+        assert_eq!(
+            serde_json::from_str::<ResponseStatus>("\"declined\"").unwrap(),
+            ResponseStatus::Declined
+        );
+        assert_eq!(
+            serde_json::from_str::<ResponseStatus>("\"tentative\"").unwrap(),
+            ResponseStatus::Tentative
+        );
+        assert_eq!(
+            serde_json::from_str::<ResponseStatus>("\"accepted\"").unwrap(),
+            ResponseStatus::Accepted
+        );
     }
 
     #[test]
@@ -161,7 +250,7 @@ mod tests {
         let event: Event = serde_json::from_str(json).unwrap();
 
         assert_eq!(event.summary, Some("Test Event".to_string()));
-        assert_eq!(event.status, Some("confirmed".to_string()));
+        assert_eq!(event.status, Some(EventStatus::Confirmed));
         assert!(event.organizer.is_some());
 
         let organizer = event.organizer.unwrap();
@@ -177,6 +266,7 @@ mod tests {
 
         assert_eq!(event.attendees.len(), 1);
         assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
+        assert_eq!(event.attendees[0].response_status, Some(ResponseStatus::Accepted));
 
         let conference = event.conference_data.unwrap();
         assert_eq!(conference.entry_points.len(), 1);
