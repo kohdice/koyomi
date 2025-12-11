@@ -156,15 +156,19 @@ pub async fn get_calendar_name(
 }
 
 /// Calculate time range based on period
-fn calculate_time_range(period: EventPeriod) -> (DateTime<Utc>, DateTime<Utc>) {
+///
+/// # Errors
+///
+/// Returns an error if the time or timezone conversion fails
+fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     let now = Local::now();
     let today_start = now
         .date_naive()
         .and_hms_opt(0, 0, 0)
-        .expect("Valid time")
+        .ok_or_else(|| Error::Calendar("Invalid time: failed to create midnight time".into()))?
         .and_local_timezone(now.timezone())
         .single()
-        .expect("Valid timezone");
+        .ok_or_else(|| Error::Calendar("Invalid timezone conversion".into()))?;
 
     let (start, end) = match period {
         EventPeriod::Day => {
@@ -181,7 +185,7 @@ fn calculate_time_range(period: EventPeriod) -> (DateTime<Utc>, DateTime<Utc>) {
         }
     };
 
-    (start.with_timezone(&Utc), end.with_timezone(&Utc))
+    Ok((start.with_timezone(&Utc), end.with_timezone(&Utc)))
 }
 
 /// List calendar events
@@ -198,7 +202,7 @@ pub async fn list_events(
     events_base_url: &str,
     calendars_base_url: &str,
 ) -> Result<CalendarEventsResponse> {
-    let (time_min, time_max) = calculate_time_range(config.period);
+    let (time_min, time_max) = calculate_time_range(config.period)?;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
 
@@ -363,21 +367,21 @@ mod tests {
 
     #[test]
     fn calculate_time_range_day() {
-        let (start, end) = calculate_time_range(EventPeriod::Day);
+        let (start, end) = calculate_time_range(EventPeriod::Day).unwrap();
         let diff = end - start;
         assert_eq!(diff.num_days(), 1);
     }
 
     #[test]
     fn calculate_time_range_week() {
-        let (start, end) = calculate_time_range(EventPeriod::Week);
+        let (start, end) = calculate_time_range(EventPeriod::Week).unwrap();
         let diff = end - start;
         assert_eq!(diff.num_days(), 7);
     }
 
     #[test]
     fn calculate_time_range_month() {
-        let (start, end) = calculate_time_range(EventPeriod::Month);
+        let (start, end) = calculate_time_range(EventPeriod::Month).unwrap();
         let diff = end - start;
         assert_eq!(diff.num_days(), 30);
     }
