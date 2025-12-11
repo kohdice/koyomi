@@ -103,7 +103,7 @@ struct SimplifiedResponse {
 #[derive(serde::Serialize)]
 struct SimplifiedEvent {
     summary: Option<String>,
-    status: Option<String>,
+    status: Option<koyomi_core::calendar::EventStatus>,
     organizer: Option<String>,
     location: Option<String>,
     start: Option<String>,
@@ -129,7 +129,7 @@ impl From<&koyomi_core::calendar::Event> for SimplifiedEvent {
     fn from(event: &koyomi_core::calendar::Event) -> Self {
         Self {
             summary: event.summary.clone(),
-            status: event.status.clone(),
+            status: event.status,
             organizer: event.organizer.as_ref().and_then(|o| o.display_name.clone()),
             location: event.location.clone(),
             start: event

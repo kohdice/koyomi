@@ -4,7 +4,8 @@ use tracing::{debug, info};
 
 use super::types::{
     Attendee, CalendarEventsResponse, ConferenceData, ConferenceSolution, EntryPoint, Event,
-    EventDateTime, EventPeriod, Organizer, ReminderOverride, Reminders,
+    EventDateTime, EventPeriod, EventStatus, Organizer, ReminderOverride, Reminders,
+    ResponseStatus,
 };
 use crate::{Error, Result};
 
@@ -42,7 +43,7 @@ struct GoogleEventsResponse {
 #[derive(Debug, Deserialize)]
 struct GoogleEvent {
     summary: Option<String>,
-    status: Option<String>,
+    status: Option<EventStatus>,
     organizer: Option<GoogleOrganizer>,
     location: Option<String>,
     start: Option<GoogleEventDateTime>,
@@ -81,7 +82,7 @@ struct GoogleAttendee {
     #[serde(rename = "displayName")]
     display_name: Option<String>,
     #[serde(rename = "responseStatus")]
-    response_status: Option<String>,
+    response_status: Option<ResponseStatus>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -552,7 +553,7 @@ mod tests {
     fn convert_event_simple_mode() {
         let google_event = GoogleEvent {
             summary: Some("Test".to_string()),
-            status: Some("confirmed".to_string()),
+            status: Some(EventStatus::Confirmed),
             organizer: Some(GoogleOrganizer {
                 email: Some("test@example.com".to_string()),
                 display_name: Some("Test User".to_string()),
@@ -573,7 +574,7 @@ mod tests {
             attendees: vec![GoogleAttendee {
                 email: Some("attendee@example.com".to_string()),
                 display_name: Some("Attendee".to_string()),
-                response_status: Some("accepted".to_string()),
+                response_status: Some(ResponseStatus::Accepted),
             }],
             reminders: Some(GoogleReminders {
                 use_default: Some(false),
@@ -613,7 +614,7 @@ mod tests {
     fn convert_event_detailed_mode() {
         let google_event = GoogleEvent {
             summary: Some("Test".to_string()),
-            status: Some("confirmed".to_string()),
+            status: Some(EventStatus::Confirmed),
             organizer: Some(GoogleOrganizer {
                 email: Some("test@example.com".to_string()),
                 display_name: Some("Test User".to_string()),
