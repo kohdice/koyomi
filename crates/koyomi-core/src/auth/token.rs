@@ -95,6 +95,11 @@ pub fn delete_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Get the path to the token file
+fn token_path() -> Result<std::path::PathBuf> {
+    Ok(config::config_dir()?.join(TOKEN_FILE))
+}
+
 /// Save token to `~/.config/koyomi/google_tokens.json`
 ///
 /// # Errors
@@ -105,7 +110,7 @@ pub fn delete_path(path: &Path) -> Result<()> {
 /// - The file cannot be written
 /// - File permissions cannot be set (Unix only)
 pub fn save(token: &StoredToken) -> Result<()> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
+    let path = token_path()?;
     save_to_path(token, &path)?;
     info!("Token saved to {}", path.display());
     Ok(())
@@ -121,8 +126,7 @@ pub fn save(token: &StoredToken) -> Result<()> {
 /// - The file cannot be read
 /// - The JSON format is invalid
 pub fn load() -> Result<StoredToken> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
-    load_from_path(&path)
+    load_from_path(&token_path()?)
 }
 
 /// Delete token from `~/.config/koyomi/google_tokens.json`
@@ -133,8 +137,7 @@ pub fn load() -> Result<StoredToken> {
 /// - The config directory cannot be determined
 /// - The file exists but cannot be removed
 pub fn delete() -> Result<()> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
-    delete_path(&path)
+    delete_path(&token_path()?)
 }
 
 #[cfg(test)]
