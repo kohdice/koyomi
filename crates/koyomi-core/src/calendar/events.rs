@@ -9,6 +9,21 @@ use super::types::{
 };
 use crate::{Error, Result};
 
+/// Trait for converting Google API types with optional detail level
+trait ConvertWithDetails<T> {
+    /// Convert with all details included
+    fn convert_detailed(self) -> T;
+    /// Convert with minimal details (for simple output)
+    fn convert_simple(self) -> T;
+    /// Convert based on details flag
+    fn convert(self, details: bool) -> T
+    where
+        Self: Sized,
+    {
+        if details { self.convert_detailed() } else { self.convert_simple() }
+    }
+}
+
 /// Base URL for Google Calendar API
 pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
@@ -67,6 +82,16 @@ struct GoogleOrganizer {
     is_self: Option<bool>,
 }
 
+impl ConvertWithDetails<Organizer> for GoogleOrganizer {
+    fn convert_detailed(self) -> Organizer {
+        Organizer { email: self.email, display_name: self.display_name, is_self: self.is_self }
+    }
+
+    fn convert_simple(self) -> Organizer {
+        Organizer { email: None, display_name: self.display_name, is_self: None }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GoogleEventDateTime {
     date: Option<String>,
@@ -76,6 +101,16 @@ struct GoogleEventDateTime {
     time_zone: Option<String>,
 }
 
+impl ConvertWithDetails<EventDateTime> for GoogleEventDateTime {
+    fn convert_detailed(self) -> EventDateTime {
+        EventDateTime { date: self.date, date_time: self.date_time, time_zone: self.time_zone }
+    }
+
+    fn convert_simple(self) -> EventDateTime {
+        EventDateTime { date: self.date, date_time: self.date_time, time_zone: None }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GoogleAttendee {
     email: Option<String>,
@@ -83,6 +118,20 @@ struct GoogleAttendee {
     display_name: Option<String>,
     #[serde(rename = "responseStatus")]
     response_status: Option<ResponseStatus>,
+}
+
+impl ConvertWithDetails<Attendee> for GoogleAttendee {
+    fn convert_detailed(self) -> Attendee {
+        Attendee {
+            email: self.email,
+            display_name: self.display_name,
+            response_status: self.response_status,
+        }
+    }
+
+    fn convert_simple(self) -> Attendee {
+        Attendee { email: self.email, display_name: self.display_name, response_status: None }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,54 +314,15 @@ fn convert_event(google: GoogleEvent, details: bool) -> Event {
     Event {
         summary: google.summary,
         status: google.status,
-        organizer: google.organizer.map(|o| convert_organizer(o, details)),
+        organizer: google.organizer.map(|o| o.convert(details)),
         location: google.location,
-        start: google.start.map(|dt| convert_datetime(dt, details)),
-        end: google.end.map(|dt| convert_datetime(dt, details)),
+        start: google.start.map(|dt| dt.convert(details)),
+        end: google.end.map(|dt| dt.convert(details)),
         description: google.description,
-        attendees: google.attendees.into_iter().map(|a| convert_attendee(a, details)).collect(),
+        attendees: google.attendees.into_iter().map(|a| a.convert(details)).collect(),
         reminders: if details { google.reminders.map(convert_reminders) } else { None },
         conference_data: google.conference_data.map(|cd| convert_conference(cd, details)),
         html_link: google.html_link,
-    }
-}
-
-fn convert_organizer(google: GoogleOrganizer, details: bool) -> Organizer {
-    if details {
-        Organizer {
-            email: google.email,
-            display_name: google.display_name,
-            is_self: google.is_self,
-        }
-    } else {
-        // For simple output, we only keep display_name
-        Organizer { email: None, display_name: google.display_name, is_self: None }
-    }
-}
-
-fn convert_datetime(google: GoogleEventDateTime, details: bool) -> EventDateTime {
-    if details {
-        EventDateTime {
-            date: google.date,
-            date_time: google.date_time,
-            time_zone: google.time_zone,
-        }
-    } else {
-        // For simple output, only keep date or date_time
-        EventDateTime { date: google.date, date_time: google.date_time, time_zone: None }
-    }
-}
-
-fn convert_attendee(google: GoogleAttendee, details: bool) -> Attendee {
-    if details {
-        Attendee {
-            email: google.email,
-            display_name: google.display_name,
-            response_status: google.response_status,
-        }
-    } else {
-        // For simple output, keep email as it's always available
-        Attendee { email: google.email, display_name: google.display_name, response_status: None }
     }
 }
 
