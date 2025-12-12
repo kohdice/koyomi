@@ -7,7 +7,7 @@ use super::types::{
     EventDateTime, EventPeriod, EventStatus, Organizer, ReminderOverride, Reminders,
     ResponseStatus,
 };
-use crate::{Error, Result};
+use crate::{CalendarError, Result};
 
 /// Trait for converting Google API types with optional detail level
 trait ConvertWithDetails<T> {
@@ -174,6 +174,23 @@ struct CalendarInfo {
     summary: Option<String>,
 }
 
+/// Convert HTTP status code to CalendarError
+fn status_to_calendar_error(
+    status: reqwest::StatusCode,
+    body: String,
+    calendar_id: &str,
+) -> CalendarError {
+    match status.as_u16() {
+        401 => CalendarError::Unauthenticated,
+        403 => CalendarError::Forbidden { calendar_id: calendar_id.to_string() },
+        404 => CalendarError::NotFound { calendar_id: calendar_id.to_string() },
+        429 => CalendarError::RateLimitExceeded,
+        400 => CalendarError::BadRequest { message: body },
+        status if status >= 500 => CalendarError::ServerError { status, message: body },
+        _ => CalendarError::BadRequest { message: format!("HTTP {}: {}", status, body) },
+    }
+}
+
 /// Get the name of a calendar
 ///
 /// # Errors
@@ -197,7 +214,7 @@ pub async fn get_calendar_name(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(Error::Calendar(format!("Failed to get calendar info: {} - {}", status, body)));
+        return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
     let info: CalendarInfo = response.json().await?;
@@ -215,10 +232,10 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
     let today_start = now
         .date_naive()
         .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| Error::Calendar("Invalid time: failed to create midnight time".into()))?
+        .ok_or_else(|| CalendarError::InvalidTime("failed to create midnight time".into()))?
         .and_local_timezone(now.timezone())
         .single()
-        .ok_or_else(|| Error::Calendar("Invalid timezone conversion".into()))?;
+        .ok_or_else(|| CalendarError::InvalidTime("timezone conversion failed".into()))?;
 
     let (start, end) = match period {
         EventPeriod::Day => {
@@ -287,7 +304,7 @@ pub async fn list_events(
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::Calendar(format!("Failed to list events: {} - {}", status, body)));
+            return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
         let google_response: GoogleEventsResponse = response.json().await?;
@@ -449,7 +466,7 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("Failed to get calendar info"));
+        assert!(error.to_string().contains("Calendar not found: primary"));
     }
 
     #[tokio::test]
@@ -668,5 +685,97 @@ mod tests {
         assert_eq!(event.reminders.as_ref().unwrap().overrides.len(), 1);
         // Detailed mode: conference data has entry points
         assert_eq!(event.conference_data.as_ref().unwrap().entry_points.len(), 1);
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_unauthenticated_for_401() {
+        let status = reqwest::StatusCode::UNAUTHORIZED;
+        let error = status_to_calendar_error(status, "token expired".to_string(), "primary");
+        assert!(matches!(error, CalendarError::Unauthenticated));
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_forbidden_for_403() {
+        let status = reqwest::StatusCode::FORBIDDEN;
+        let error =
+            status_to_calendar_error(status, "access denied".to_string(), "test@example.com");
+        assert!(
+            matches!(error, CalendarError::Forbidden { calendar_id } if calendar_id == "test@example.com")
+        );
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_not_found_for_404() {
+        let status = reqwest::StatusCode::NOT_FOUND;
+        let error = status_to_calendar_error(status, "not found".to_string(), "primary");
+        assert!(
+            matches!(error, CalendarError::NotFound { calendar_id } if calendar_id == "primary")
+        );
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_rate_limit_for_429() {
+        let status = reqwest::StatusCode::TOO_MANY_REQUESTS;
+        let error = status_to_calendar_error(status, "rate limited".to_string(), "primary");
+        assert!(matches!(error, CalendarError::RateLimitExceeded));
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_bad_request_for_400() {
+        let status = reqwest::StatusCode::BAD_REQUEST;
+        let error = status_to_calendar_error(status, "invalid params".to_string(), "primary");
+        assert!(
+            matches!(error, CalendarError::BadRequest { message } if message == "invalid params")
+        );
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_server_error_for_5xx() {
+        let status = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+        let error = status_to_calendar_error(status, "internal error".to_string(), "primary");
+        assert!(matches!(error, CalendarError::ServerError { status: 500, .. }));
+
+        let status = reqwest::StatusCode::SERVICE_UNAVAILABLE;
+        let error = status_to_calendar_error(status, "unavailable".to_string(), "primary");
+        assert!(matches!(error, CalendarError::ServerError { status: 503, .. }));
+    }
+
+    #[tokio::test]
+    async fn get_calendar_name_returns_unauthenticated_on_401() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/primary"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result =
+            get_calendar_name(&client, "invalid_token", "primary", &mock_server.uri()).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Authentication required"));
+    }
+
+    #[tokio::test]
+    async fn get_calendar_name_returns_forbidden_on_403() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/private%40example.com"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result =
+            get_calendar_name(&client, "test_token", "private@example.com", &mock_server.uri())
+                .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Access denied to calendar"));
     }
 }
