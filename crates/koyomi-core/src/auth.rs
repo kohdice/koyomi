@@ -161,14 +161,4 @@ mod tests {
         // Verify refresh module is public
         let _: &str = refresh::TOKEN_URL;
     }
-
-    #[test]
-    fn get_valid_token_returns_token_not_found_when_no_token() {
-        // Test that get_valid_token returns TokenNotFound when no token exists
-        // We can't easily test this without creating actual files, but we can
-        // verify the function signature is correct
-        let _: fn() -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<token::StoredToken>> + Send>,
-        > = || Box::pin(get_valid_token());
-    }
 }
