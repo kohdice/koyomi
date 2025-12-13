@@ -1,4 +1,5 @@
 mod device_flow;
+pub mod refresh;
 pub mod token;
 
 use chrono::Utc;
@@ -76,6 +77,49 @@ pub async fn login() -> Result<()> {
     Ok(())
 }
 
+/// Default buffer duration for token refresh (5 minutes)
+const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
+
+/// Get a valid access token, refreshing if necessary
+///
+/// This function loads the stored token and checks if it's expired or about to expire
+/// (within 5 minutes). If so, it refreshes the token and saves the new one.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - No token is stored ([`Error::TokenNotFound`])
+/// - The config directory or client secret cannot be loaded
+/// - Token refresh fails
+/// - The new token cannot be saved
+pub async fn get_valid_token() -> Result<token::StoredToken> {
+    let mut stored_token = token::load()?;
+
+    let buffer = chrono::Duration::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
+    if stored_token.is_expired_with_buffer(buffer) {
+        debug!("Token expired or expiring soon, refreshing");
+
+        let secret = config::load()?;
+        let client = reqwest::Client::new();
+
+        let new_token = refresh::refresh_token(
+            &client,
+            &secret.installed.client_id,
+            &secret.installed.client_secret,
+            &stored_token,
+            refresh::TOKEN_URL,
+        )
+        .await?;
+
+        token::save(&new_token)?;
+        info!("Token refreshed and saved");
+
+        stored_token = new_token;
+    }
+
+    Ok(stored_token)
+}
+
 /// Remove stored tokens
 ///
 /// # Errors
@@ -110,5 +154,11 @@ mod tests {
     #[test]
     fn token_module_is_accessible() {
         let _: fn() -> Result<token::StoredToken> = token::load;
+    }
+
+    #[test]
+    fn refresh_module_is_accessible() {
+        // Verify refresh module is public
+        let _: &str = refresh::TOKEN_URL;
     }
 }

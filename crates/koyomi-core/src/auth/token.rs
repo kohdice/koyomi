@@ -19,6 +19,21 @@ pub struct StoredToken {
     pub obtained_at: DateTime<Utc>,
 }
 
+impl StoredToken {
+    /// Check if the token has expired
+    pub fn is_expired(&self) -> bool {
+        Utc::now() >= self.expires_at
+    }
+
+    /// Check if the token has expired or will expire within the given buffer duration
+    ///
+    /// This is useful for proactively refreshing tokens before they actually expire.
+    /// A recommended buffer is 5 minutes.
+    pub fn is_expired_with_buffer(&self, buffer: chrono::Duration) -> bool {
+        Utc::now() + buffer >= self.expires_at
+    }
+}
+
 /// Save token to the specified path
 ///
 /// # Errors
@@ -80,6 +95,11 @@ pub fn delete_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Get the path to the token file
+fn token_path() -> Result<std::path::PathBuf> {
+    Ok(config::config_dir()?.join(TOKEN_FILE))
+}
+
 /// Save token to `~/.config/koyomi/google_tokens.json`
 ///
 /// # Errors
@@ -90,7 +110,7 @@ pub fn delete_path(path: &Path) -> Result<()> {
 /// - The file cannot be written
 /// - File permissions cannot be set (Unix only)
 pub fn save(token: &StoredToken) -> Result<()> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
+    let path = token_path()?;
     save_to_path(token, &path)?;
     info!("Token saved to {}", path.display());
     Ok(())
@@ -106,8 +126,7 @@ pub fn save(token: &StoredToken) -> Result<()> {
 /// - The file cannot be read
 /// - The JSON format is invalid
 pub fn load() -> Result<StoredToken> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
-    load_from_path(&path)
+    load_from_path(&token_path()?)
 }
 
 /// Delete token from `~/.config/koyomi/google_tokens.json`
@@ -118,8 +137,7 @@ pub fn load() -> Result<StoredToken> {
 /// - The config directory cannot be determined
 /// - The file exists but cannot be removed
 pub fn delete() -> Result<()> {
-    let path = config::config_dir()?.join(TOKEN_FILE);
-    delete_path(&path)
+    delete_path(&token_path()?)
 }
 
 #[cfg(test)]
@@ -234,5 +252,69 @@ mod tests {
         let loaded = load_from_path(&path).unwrap();
 
         assert!(loaded.refresh_token.is_none());
+    }
+
+    #[test]
+    fn is_expired_returns_false_for_valid_token() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test_access_token".to_string(),
+            refresh_token: Some("test_refresh_token".to_string()),
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now + Duration::hours(1),
+            obtained_at: now,
+        };
+
+        assert!(!token.is_expired());
+    }
+
+    #[test]
+    fn is_expired_returns_true_for_expired_token() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test_access_token".to_string(),
+            refresh_token: Some("test_refresh_token".to_string()),
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now - Duration::hours(1),
+            obtained_at: now - Duration::hours(2),
+        };
+
+        assert!(token.is_expired());
+    }
+
+    #[test]
+    fn is_expired_with_buffer_returns_true_when_expiring_soon() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test_access_token".to_string(),
+            refresh_token: Some("test_refresh_token".to_string()),
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now + Duration::minutes(3),
+            obtained_at: now,
+        };
+
+        // Token expires in 3 minutes, so 5-minute buffer should consider it expired
+        assert!(token.is_expired_with_buffer(Duration::minutes(5)));
+        // But without buffer, it's still valid
+        assert!(!token.is_expired());
+    }
+
+    #[test]
+    fn is_expired_with_buffer_returns_false_when_not_expiring_soon() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test_access_token".to_string(),
+            refresh_token: Some("test_refresh_token".to_string()),
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now + Duration::hours(1),
+            obtained_at: now,
+        };
+
+        // Token expires in 1 hour, so 5-minute buffer should not consider it expired
+        assert!(!token.is_expired_with_buffer(Duration::minutes(5)));
     }
 }
