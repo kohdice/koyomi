@@ -2,27 +2,8 @@ use chrono::{DateTime, Duration, Local, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use super::types::{
-    Attendee, CalendarEventsResponse, ConferenceData, ConferenceSolution, EntryPoint, Event,
-    EventDateTime, EventPeriod, EventStatus, Organizer, ReminderOverride, Reminders,
-    ResponseStatus,
-};
+use super::types::{CalendarEvents, Event, EventPeriod};
 use crate::{CalendarError, Result};
-
-/// Trait for converting Google API types with optional detail level
-trait ConvertWithDetails<T> {
-    /// Convert with all details included
-    fn convert_detailed(self) -> T;
-    /// Convert with minimal details (for simple output)
-    fn convert_simple(self) -> T;
-    /// Convert based on details flag
-    fn convert(self, details: bool) -> T
-    where
-        Self: Sized,
-    {
-        if details { self.convert_detailed() } else { self.convert_simple() }
-    }
-}
 
 /// Base URL for Google Calendar API
 pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -36,136 +17,20 @@ pub struct ListEventsConfig {
     pub calendar_id: String,
     /// Time period to fetch events for
     pub period: EventPeriod,
-    /// Whether to include detailed information
-    pub details: bool,
 }
 
 impl Default for ListEventsConfig {
     fn default() -> Self {
-        Self { calendar_id: "primary".to_string(), period: EventPeriod::default(), details: false }
+        Self { calendar_id: "primary".to_string(), period: EventPeriod::default() }
     }
 }
 
-/// Response from Google Calendar Events API
+/// Paginated response from Google Calendar Events API
 #[derive(Debug, Deserialize)]
-struct GoogleEventsResponse {
-    items: Option<Vec<GoogleEvent>>,
-    #[serde(rename = "nextPageToken")]
+#[serde(rename_all = "camelCase")]
+struct PageResponse {
+    items: Option<Vec<Event>>,
     next_page_token: Option<String>,
-}
-
-/// Event from Google Calendar API
-#[derive(Debug, Deserialize)]
-struct GoogleEvent {
-    summary: Option<String>,
-    status: Option<EventStatus>,
-    organizer: Option<GoogleOrganizer>,
-    location: Option<String>,
-    start: Option<GoogleEventDateTime>,
-    end: Option<GoogleEventDateTime>,
-    description: Option<String>,
-    #[serde(default)]
-    attendees: Vec<GoogleAttendee>,
-    reminders: Option<GoogleReminders>,
-    #[serde(rename = "conferenceData")]
-    conference_data: Option<GoogleConferenceData>,
-    #[serde(rename = "htmlLink")]
-    html_link: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleOrganizer {
-    email: Option<String>,
-    #[serde(rename = "displayName")]
-    display_name: Option<String>,
-    #[serde(rename = "self")]
-    is_self: Option<bool>,
-}
-
-impl ConvertWithDetails<Organizer> for GoogleOrganizer {
-    fn convert_detailed(self) -> Organizer {
-        Organizer { email: self.email, display_name: self.display_name, is_self: self.is_self }
-    }
-
-    fn convert_simple(self) -> Organizer {
-        Organizer { email: None, display_name: self.display_name, is_self: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleEventDateTime {
-    date: Option<String>,
-    #[serde(rename = "dateTime")]
-    date_time: Option<String>,
-    #[serde(rename = "timeZone")]
-    time_zone: Option<String>,
-}
-
-impl ConvertWithDetails<EventDateTime> for GoogleEventDateTime {
-    fn convert_detailed(self) -> EventDateTime {
-        EventDateTime { date: self.date, date_time: self.date_time, time_zone: self.time_zone }
-    }
-
-    fn convert_simple(self) -> EventDateTime {
-        EventDateTime { date: self.date, date_time: self.date_time, time_zone: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleAttendee {
-    email: Option<String>,
-    #[serde(rename = "displayName")]
-    display_name: Option<String>,
-    #[serde(rename = "responseStatus")]
-    response_status: Option<ResponseStatus>,
-}
-
-impl ConvertWithDetails<Attendee> for GoogleAttendee {
-    fn convert_detailed(self) -> Attendee {
-        Attendee {
-            email: self.email,
-            display_name: self.display_name,
-            response_status: self.response_status,
-        }
-    }
-
-    fn convert_simple(self) -> Attendee {
-        Attendee { email: self.email, display_name: self.display_name, response_status: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleReminders {
-    #[serde(rename = "useDefault")]
-    use_default: Option<bool>,
-    #[serde(default)]
-    overrides: Vec<GoogleReminderOverride>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleReminderOverride {
-    method: Option<String>,
-    minutes: Option<i32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleConferenceData {
-    #[serde(rename = "entryPoints", default)]
-    entry_points: Vec<GoogleEntryPoint>,
-    #[serde(rename = "conferenceSolution")]
-    conference_solution: Option<GoogleConferenceSolution>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleEntryPoint {
-    #[serde(rename = "entryPointType")]
-    entry_point_type: Option<String>,
-    uri: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleConferenceSolution {
-    name: Option<String>,
 }
 
 /// Response from Google Calendar API for calendar info
@@ -268,7 +133,7 @@ pub async fn list_events(
     config: &ListEventsConfig,
     events_base_url: &str,
     calendars_base_url: &str,
-) -> Result<CalendarEventsResponse> {
+) -> Result<CalendarEvents> {
     let (time_min, time_max) = calculate_time_range(config.period)?;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
@@ -307,15 +172,13 @@ pub async fn list_events(
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
-        let google_response: GoogleEventsResponse = response.json().await?;
+        let page: PageResponse = response.json().await?;
 
-        if let Some(items) = google_response.items {
-            for google_event in items {
-                all_events.push(convert_event(google_event, config.details));
-            }
+        if let Some(items) = page.items {
+            all_events.extend(items);
         }
 
-        match google_response.next_page_token {
+        match page.next_page_token {
             Some(token) => page_token = Some(token),
             None => break,
         }
@@ -323,60 +186,7 @@ pub async fn list_events(
 
     info!("Found {} events", all_events.len());
 
-    Ok(CalendarEventsResponse { calendar: calendar_name, events: all_events })
-}
-
-/// Convert Google API event to our Event type
-fn convert_event(google: GoogleEvent, details: bool) -> Event {
-    Event {
-        summary: google.summary,
-        status: google.status,
-        organizer: google.organizer.map(|o| o.convert(details)),
-        location: google.location,
-        start: google.start.map(|dt| dt.convert(details)),
-        end: google.end.map(|dt| dt.convert(details)),
-        description: google.description,
-        attendees: google.attendees.into_iter().map(|a| a.convert(details)).collect(),
-        reminders: if details { google.reminders.map(convert_reminders) } else { None },
-        conference_data: google.conference_data.map(|cd| convert_conference(cd, details)),
-        html_link: google.html_link,
-    }
-}
-
-fn convert_reminders(google: GoogleReminders) -> Reminders {
-    Reminders {
-        use_default: google.use_default.unwrap_or(true),
-        overrides: google
-            .overrides
-            .into_iter()
-            .filter_map(|o| Some(ReminderOverride { method: o.method?, minutes: o.minutes? }))
-            .collect(),
-    }
-}
-
-fn convert_conference(google: GoogleConferenceData, details: bool) -> ConferenceData {
-    if details {
-        ConferenceData {
-            entry_points: google
-                .entry_points
-                .into_iter()
-                .filter_map(|ep| {
-                    Some(EntryPoint { entry_point_type: ep.entry_point_type?, uri: ep.uri? })
-                })
-                .collect(),
-            conference_solution: google
-                .conference_solution
-                .and_then(|cs| cs.name.map(|name| ConferenceSolution { name })),
-        }
-    } else {
-        // For simple output, only keep conference solution name
-        ConferenceData {
-            entry_points: vec![],
-            conference_solution: google
-                .conference_solution
-                .and_then(|cs| cs.name.map(|name| ConferenceSolution { name })),
-        }
-    }
+    Ok(CalendarEvents { calendar: calendar_name, events: all_events })
 }
 
 #[cfg(test)]
@@ -390,7 +200,6 @@ mod tests {
         let config = ListEventsConfig::default();
         assert_eq!(config.calendar_id, "primary");
         assert_eq!(config.period, EventPeriod::Day);
-        assert!(!config.details);
     }
 
     #[test]
@@ -514,10 +323,10 @@ mod tests {
                 .await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.calendar, "My Calendar");
-        assert_eq!(response.events.len(), 1);
-        assert_eq!(response.events[0].summary, Some("Test Event".to_string()));
+        let events = result.unwrap();
+        assert_eq!(events.calendar, "My Calendar");
+        assert_eq!(events.events.len(), 1);
+        assert_eq!(events.events[0].summary, Some("Test Event".to_string()));
     }
 
     #[tokio::test]
@@ -570,121 +379,10 @@ mod tests {
                 .await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.events.len(), 2);
-        assert_eq!(response.events[0].summary, Some("Event 1".to_string()));
-        assert_eq!(response.events[1].summary, Some("Event 2".to_string()));
-    }
-
-    #[test]
-    fn convert_event_simple_mode() {
-        let google_event = GoogleEvent {
-            summary: Some("Test".to_string()),
-            status: Some(EventStatus::Confirmed),
-            organizer: Some(GoogleOrganizer {
-                email: Some("test@example.com".to_string()),
-                display_name: Some("Test User".to_string()),
-                is_self: Some(true),
-            }),
-            location: Some("Room A".to_string()),
-            start: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T10:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            end: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T11:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            description: Some("Description".to_string()),
-            attendees: vec![GoogleAttendee {
-                email: Some("attendee@example.com".to_string()),
-                display_name: Some("Attendee".to_string()),
-                response_status: Some(ResponseStatus::Accepted),
-            }],
-            reminders: Some(GoogleReminders {
-                use_default: Some(false),
-                overrides: vec![GoogleReminderOverride {
-                    method: Some("popup".to_string()),
-                    minutes: Some(10),
-                }],
-            }),
-            conference_data: Some(GoogleConferenceData {
-                entry_points: vec![GoogleEntryPoint {
-                    entry_point_type: Some("video".to_string()),
-                    uri: Some("https://meet.google.com/abc".to_string()),
-                }],
-                conference_solution: Some(GoogleConferenceSolution {
-                    name: Some("Google Meet".to_string()),
-                }),
-            }),
-            html_link: Some("https://calendar.google.com/event".to_string()),
-        };
-
-        let event = convert_event(google_event, false);
-
-        // Simple mode: organizer only has display_name
-        assert!(event.organizer.as_ref().unwrap().email.is_none());
-        assert_eq!(event.organizer.as_ref().unwrap().display_name, Some("Test User".to_string()));
-        // Simple mode: no reminders
-        assert!(event.reminders.is_none());
-        // Simple mode: attendee has email and display_name (no response_status)
-        assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
-        assert_eq!(event.attendees[0].display_name, Some("Attendee".to_string()));
-        assert!(event.attendees[0].response_status.is_none());
-        // Simple mode: conference data only has solution name
-        assert!(event.conference_data.as_ref().unwrap().entry_points.is_empty());
-    }
-
-    #[test]
-    fn convert_event_detailed_mode() {
-        let google_event = GoogleEvent {
-            summary: Some("Test".to_string()),
-            status: Some(EventStatus::Confirmed),
-            organizer: Some(GoogleOrganizer {
-                email: Some("test@example.com".to_string()),
-                display_name: Some("Test User".to_string()),
-                is_self: Some(true),
-            }),
-            location: None,
-            start: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T10:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            end: None,
-            description: None,
-            attendees: vec![],
-            reminders: Some(GoogleReminders {
-                use_default: Some(false),
-                overrides: vec![GoogleReminderOverride {
-                    method: Some("popup".to_string()),
-                    minutes: Some(10),
-                }],
-            }),
-            conference_data: Some(GoogleConferenceData {
-                entry_points: vec![GoogleEntryPoint {
-                    entry_point_type: Some("video".to_string()),
-                    uri: Some("https://meet.google.com/abc".to_string()),
-                }],
-                conference_solution: Some(GoogleConferenceSolution {
-                    name: Some("Google Meet".to_string()),
-                }),
-            }),
-            html_link: None,
-        };
-
-        let event = convert_event(google_event, true);
-
-        // Detailed mode: organizer has all fields
-        assert_eq!(event.organizer.as_ref().unwrap().email, Some("test@example.com".to_string()));
-        assert_eq!(event.organizer.as_ref().unwrap().is_self, Some(true));
-        // Detailed mode: has reminders
-        assert!(event.reminders.is_some());
-        assert_eq!(event.reminders.as_ref().unwrap().overrides.len(), 1);
-        // Detailed mode: conference data has entry points
-        assert_eq!(event.conference_data.as_ref().unwrap().entry_points.len(), 1);
+        let events = result.unwrap();
+        assert_eq!(events.events.len(), 2);
+        assert_eq!(events.events[0].summary, Some("Event 1".to_string()));
+        assert_eq!(events.events[1].summary, Some("Event 2".to_string()));
     }
 
     #[test]

@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-/// Response containing calendar name and events
+/// Calendar name and associated events
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalendarEventsResponse {
+pub struct CalendarEvents {
     pub calendar: String,
     pub events: Vec<Event>,
 }
 
 /// Calendar event with all relevant fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Event {
     pub summary: Option<String>,
     pub status: Option<EventStatus>,
@@ -20,46 +21,43 @@ pub struct Event {
     #[serde(default)]
     pub attendees: Vec<Attendee>,
     pub reminders: Option<Reminders>,
-    #[serde(rename = "conferenceData")]
     pub conference_data: Option<ConferenceData>,
-    #[serde(rename = "htmlLink")]
     pub html_link: Option<String>,
 }
 
 /// Event date/time representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EventDateTime {
     pub date: Option<String>,
-    #[serde(rename = "dateTime")]
     pub date_time: Option<String>,
-    #[serde(rename = "timeZone")]
     pub time_zone: Option<String>,
 }
 
 /// Event organizer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Organizer {
     pub email: Option<String>,
-    #[serde(rename = "displayName")]
     pub display_name: Option<String>,
+    /// Google API uses the bare keyword `"self"`, not `"isSelf"`
     #[serde(rename = "self")]
     pub is_self: Option<bool>,
 }
 
 /// Event attendee information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Attendee {
     pub email: Option<String>,
-    #[serde(rename = "displayName")]
     pub display_name: Option<String>,
-    #[serde(rename = "responseStatus")]
     pub response_status: Option<ResponseStatus>,
 }
 
 /// Reminder settings for an event
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Reminders {
-    #[serde(rename = "useDefault")]
     pub use_default: bool,
     #[serde(default)]
     pub overrides: Vec<ReminderOverride>,
@@ -74,17 +72,17 @@ pub struct ReminderOverride {
 
 /// Conference/meeting information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConferenceData {
-    #[serde(rename = "entryPoints", default)]
+    #[serde(default)]
     pub entry_points: Vec<EntryPoint>,
-    #[serde(rename = "conferenceSolution")]
     pub conference_solution: Option<ConferenceSolution>,
 }
 
 /// Entry point for joining a conference
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryPoint {
-    #[serde(rename = "entryPointType")]
     pub entry_point_type: String,
     pub uri: String,
 }
@@ -319,11 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn calendar_events_response_serialize() {
-        let response =
-            CalendarEventsResponse { calendar: "Test Calendar".to_string(), events: vec![] };
+    fn calendar_events_serialize() {
+        let events = CalendarEvents { calendar: "Test Calendar".to_string(), events: vec![] };
 
-        let json = serde_json::to_string(&response).unwrap();
+        let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains("\"calendar\":\"Test Calendar\""));
         assert!(json.contains("\"events\":[]"));
     }
