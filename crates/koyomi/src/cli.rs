@@ -13,7 +13,7 @@ pub struct Cli {
     pub verbose: u8,
 
     #[clap(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 /// Time period for event listing
@@ -62,10 +62,16 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_no_subcommand() {
+        let cli = Cli::parse_from(["koyomi"]);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
     fn cli_parses_events_command_with_defaults() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Some(Commands::Events { period, calendar, details }) => {
                 assert_eq!(period, Period::Day);
                 assert_eq!(calendar, "primary");
                 assert!(!details);
@@ -78,7 +84,7 @@ mod tests {
     fn cli_parses_events_command_with_period_alias() {
         let cli = Cli::parse_from(["koyomi", "events", "-p", "w"]);
         match cli.command {
-            Commands::Events { period, .. } => {
+            Some(Commands::Events { period, .. }) => {
                 assert_eq!(period, Period::Week);
             }
             _ => panic!("Expected Events command"),
@@ -97,7 +103,7 @@ mod tests {
             "--details",
         ]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Some(Commands::Events { period, calendar, details }) => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "work@example.com");
                 assert!(details);
@@ -110,7 +116,7 @@ mod tests {
     fn cli_parses_events_command_with_short_options() {
         let cli = Cli::parse_from(["koyomi", "events", "-p", "m", "-c", "test@example.com", "-d"]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Some(Commands::Events { period, calendar, details }) => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "test@example.com");
                 assert!(details);

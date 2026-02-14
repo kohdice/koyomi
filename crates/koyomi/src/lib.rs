@@ -41,16 +41,21 @@ pub async fn run() -> Result<()> {
     init_tracing(cli.verbose);
 
     match cli.command {
-        Commands::Login => {
+        Some(Commands::Login) => {
             koyomi_core::login().await?;
             Ok(())
         }
-        Commands::Logout => {
+        Some(Commands::Logout) => {
             koyomi_core::logout().await?;
             Ok(())
         }
-        Commands::Events { period, calendar, details } => {
+        Some(Commands::Events { period, calendar, details }) => {
             handle_events(period, calendar, details).await
+        }
+        None => {
+            eprintln!("TUI mode is not yet implemented. Use a subcommand.");
+            eprintln!("Run `koyomi --help` for usage information.");
+            std::process::exit(2);
         }
     }
 }
@@ -61,93 +66,13 @@ async fn handle_events(period: Period, calendar: String, details: bool) -> Resul
     let config = koyomi_core::calendar::ListEventsConfig {
         calendar_id: calendar,
         period: convert_period(period),
-        details,
     };
 
-    let client = reqwest::Client::new();
-    let response = koyomi_core::calendar::list_events(
-        &client,
-        &token.access_token,
-        &config,
-        koyomi_core::calendar::CALENDAR_API_BASE_URL,
-        koyomi_core::calendar::CALENDAR_API_BASE_URL,
-    )
-    .await?;
+    let client = koyomi_core::Client::new();
+    let events = client.list_events(&token, &config).await?;
 
-    let output = format_output(&response, details)?;
-    println!("{}", output);
+    let mut stdout = std::io::stdout().lock();
+    koyomi_ui::json::render(&mut stdout, &events, details)?;
 
     Ok(())
-}
-
-/// Format the response based on the details flag
-fn format_output(
-    response: &koyomi_core::calendar::CalendarEventsResponse,
-    details: bool,
-) -> Result<String> {
-    if details {
-        Ok(serde_json::to_string_pretty(response)?)
-    } else {
-        let simplified = SimplifiedResponse::from(response);
-        Ok(serde_json::to_string_pretty(&simplified)?)
-    }
-}
-
-/// Simplified response format for default output
-#[derive(serde::Serialize)]
-struct SimplifiedResponse {
-    calendar: String,
-    events: Vec<SimplifiedEvent>,
-}
-
-#[derive(serde::Serialize)]
-struct SimplifiedEvent {
-    summary: Option<String>,
-    status: Option<koyomi_core::calendar::EventStatus>,
-    organizer: Option<String>,
-    location: Option<String>,
-    start: Option<String>,
-    end: Option<String>,
-    description: Option<String>,
-    attendees: Vec<String>,
-    #[serde(rename = "conferenceData")]
-    conference_data: Option<String>,
-    #[serde(rename = "htmlLink")]
-    html_link: Option<String>,
-}
-
-impl From<&koyomi_core::calendar::CalendarEventsResponse> for SimplifiedResponse {
-    fn from(response: &koyomi_core::calendar::CalendarEventsResponse) -> Self {
-        Self {
-            calendar: response.calendar.clone(),
-            events: response.events.iter().map(SimplifiedEvent::from).collect(),
-        }
-    }
-}
-
-impl From<&koyomi_core::calendar::Event> for SimplifiedEvent {
-    fn from(event: &koyomi_core::calendar::Event) -> Self {
-        Self {
-            summary: event.summary.clone(),
-            status: event.status,
-            organizer: event.organizer.as_ref().and_then(|o| o.display_name.clone()),
-            location: event.location.clone(),
-            start: event
-                .start
-                .as_ref()
-                .and_then(|dt| dt.date_time.clone().or_else(|| dt.date.clone())),
-            end: event.end.as_ref().and_then(|dt| dt.date_time.clone().or_else(|| dt.date.clone())),
-            description: event.description.clone(),
-            attendees: event
-                .attendees
-                .iter()
-                .filter_map(|a| a.display_name.clone().or_else(|| a.email.clone()))
-                .collect(),
-            conference_data: event
-                .conference_data
-                .as_ref()
-                .and_then(|cd| cd.conference_solution.as_ref().map(|cs| cs.name.clone())),
-            html_link: event.html_link.clone(),
-        }
-    }
 }
