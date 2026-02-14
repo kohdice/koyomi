@@ -10,6 +10,30 @@ pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/
 
 const MAX_RESULTS: u32 = 250;
 
+/// Fields to request from Calendar info endpoint (Partial Response)
+///
+/// <https://developers.google.com/calendar/api/guides/performance#partial-response>
+const CALENDAR_INFO_FIELDS: &str = "summary";
+
+/// Fields to request from Events list endpoint (Partial Response)
+///
+/// <https://developers.google.com/calendar/api/guides/performance#partial-response>
+const EVENTS_LIST_FIELDS: &str = "\
+    nextPageToken,\
+    items(\
+        summary,\
+        status,\
+        organizer(email,displayName,self),\
+        location,\
+        start(date,dateTime,timeZone),\
+        end(date,dateTime,timeZone),\
+        description,\
+        attendees(email,displayName,responseStatus),\
+        reminders(useDefault,overrides(method,minutes)),\
+        conferenceData(entryPoints(entryPointType,uri),conferenceSolution(name)),\
+        htmlLink\
+    )";
+
 /// Configuration for listing calendar events
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
@@ -69,7 +93,12 @@ pub async fn get_calendar_name(
     calendar_id: &str,
     base_url: &str,
 ) -> Result<String> {
-    let url = format!("{}/{}", base_url, urlencoding::encode(calendar_id));
+    let url = format!(
+        "{}/{}?fields={}",
+        base_url,
+        urlencoding::encode(calendar_id),
+        CALENDAR_INFO_FIELDS
+    );
 
     debug!("Fetching calendar info: {}", url);
 
@@ -146,12 +175,13 @@ pub async fn list_events(
 
     loop {
         let mut url = format!(
-            "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
+            "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&fields={}",
             events_base_url,
             urlencoding::encode(&config.calendar_id),
             MAX_RESULTS,
             urlencoding::encode(&time_min.to_rfc3339()),
-            urlencoding::encode(&time_max.to_rfc3339())
+            urlencoding::encode(&time_max.to_rfc3339()),
+            EVENTS_LIST_FIELDS,
         );
 
         if let Some(token) = &page_token {
@@ -230,6 +260,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/primary"))
             .and(header("Authorization", "Bearer test_token"))
+            .and(query_param("fields", CALENDAR_INFO_FIELDS))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "summary": "My Calendar"
             })))
@@ -296,6 +327,7 @@ mod tests {
             .and(path("/primary/events"))
             .and(query_param("singleEvents", "true"))
             .and(query_param("orderBy", "startTime"))
+            .and(query_param("fields", EVENTS_LIST_FIELDS))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "items": [
                     {
