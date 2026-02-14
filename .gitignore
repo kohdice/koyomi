@@ -20,22 +20,18 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# env file
+# env
 .env
+
+# direnv
+.direnv/
+.envrc.local
 
 # OS metadata
 .DS_Store
 Thumbs.db
 
 # Claude
-.claude/settings.local.json
+settings.local.json
 .mcp.json
-
-# Codex
-.codex
-
-# OpenCode
-opencode.json
-
-# MCP
-.lsmcp
+.plans/
