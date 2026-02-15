@@ -76,6 +76,13 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
                     mode,
                     path.display()
                 );
+                eprintln!(
+                    "Warning: {} has overly permissive file permissions ({:o}). \
+                     Recommended: chmod 600 {}",
+                    path.display(),
+                    mode,
+                    path.display()
+                );
             }
         }
     }
