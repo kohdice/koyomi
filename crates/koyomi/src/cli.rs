@@ -6,14 +6,14 @@ const LONG_ABOUT: &str = r#"Command line interface for Koyomi, a calendar tool.
 Its name derives from the Japanese word "暦" (koyomi), meaning calendar."#;
 
 #[derive(Parser, Debug)]
-#[command(version, about = ABOUT, long_about = LONG_ABOUT)]
+#[command(version, about = ABOUT, long_about = LONG_ABOUT, subcommand_required = true)]
 pub struct Cli {
     /// Increase verbosity (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Commands,
 }
 
 /// Time period for event listing
@@ -66,16 +66,16 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_no_subcommand() {
-        let cli = Cli::parse_from(["koyomi"]);
-        assert!(cli.command.is_none());
+    fn cli_rejects_no_subcommand() {
+        let result = Cli::try_parse_from(["koyomi"]);
+        assert!(result.is_err());
     }
 
     #[test]
     fn cli_parses_events_command_with_defaults() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Day);
                 assert_eq!(calendar, "primary");
                 assert!(!details);
@@ -89,7 +89,7 @@ mod tests {
     fn cli_parses_events_command_with_period_alias() {
         let cli = Cli::parse_from(["koyomi", "events", "-p", "w"]);
         match cli.command {
-            Some(Commands::Events { period, .. }) => {
+            Commands::Events { period, .. } => {
                 assert_eq!(period, Period::Week);
             }
             _ => panic!("Expected Events command"),
@@ -110,7 +110,7 @@ mod tests {
             "100",
         ]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "work@example.com");
                 assert!(details);
@@ -134,7 +134,7 @@ mod tests {
             "50",
         ]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "test@example.com");
                 assert!(details);

@@ -45,20 +45,17 @@ pub async fn run() -> Result<()> {
     let client = koyomi_core::Client::new()?;
 
     match cli.command {
-        Some(Commands::Login) => {
+        Commands::Login => {
             koyomi_core::login(client.http()).await?;
             Ok(())
         }
-        Some(Commands::Logout) => {
+        Commands::Logout => {
             koyomi_core::logout()?;
             Ok(())
         }
-        Some(Commands::Events { period, calendar, details, limit }) => {
+        Commands::Events { period, calendar, details, limit } => {
             handle_events(&client, period, calendar, details, limit).await
         }
-        None => Err(anyhow::anyhow!(
-            "No subcommand specified. Run `koyomi --help` for usage information."
-        )),
     }
 }
 
