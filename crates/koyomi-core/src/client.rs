@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use crate::Result;
 use crate::auth::token::StoredToken;
 use crate::calendar::{self, CalendarEvents, ListEventsConfig};
+
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// High-level API client for Google Calendar operations.
 ///
@@ -13,7 +17,17 @@ pub struct Client {
 impl Client {
     #[must_use]
     pub fn new() -> Self {
-        Self { http: reqwest::Client::new() }
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build HTTP client");
+        Self { http }
+    }
+
+    /// Returns a reference to the internal HTTP client.
+    #[must_use]
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http
     }
 
     /// Lists calendar events for the given token and configuration.

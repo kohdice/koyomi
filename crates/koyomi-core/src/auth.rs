@@ -2,7 +2,6 @@ mod device_flow;
 pub mod refresh;
 pub mod token;
 
-use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::{Error, Result, config};
@@ -16,16 +15,13 @@ use crate::{Error, Result, config};
 /// - The device code request fails
 /// - Token polling times out or is denied
 /// - The token cannot be saved
-pub async fn login() -> Result<()> {
+pub async fn login(http: &reqwest::Client) -> Result<()> {
     let secret = config::load()?;
     info!("Loaded OAuth2 client configuration");
 
-    let client = reqwest::Client::new();
-
     debug!("Requesting device code");
     let device_response =
-        device_flow::start(&client, &secret.installed.client_id, device_flow::DEVICE_CODE_URL)
-            .await?;
+        device_flow::start(http, &secret.installed.client_id, device_flow::DEVICE_CODE_URL).await?;
 
     eprintln!();
     eprintln!("To sign in, please visit: {}", device_response.verification_url);
@@ -34,7 +30,7 @@ pub async fn login() -> Result<()> {
 
     if let Err(e) = open::that(&device_response.verification_url) {
         warn!("Could not open browser automatically: {}", e);
-        warn!("Please open the URL manually");
+        eprintln!("Could not open browser automatically. Please open the URL above manually.");
     }
 
     eprintln!("Waiting for authorization...");
@@ -47,7 +43,7 @@ pub async fn login() -> Result<()> {
 
     debug!("Starting token polling");
     let token_response = device_flow::poll(
-        &client,
+        http,
         &secret.installed.client_id,
         &secret.installed.client_secret,
         &device_response.device_code,
@@ -55,19 +51,13 @@ pub async fn login() -> Result<()> {
     )
     .await?;
 
-    let now = Utc::now();
-    let expires_in_secs = i64::try_from(token_response.expires_in)
-        .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
-    let expires_at = now + chrono::TimeDelta::seconds(expires_in_secs);
-
-    let stored_token = token::StoredToken {
-        access_token: token_response.access_token,
-        refresh_token: token_response.refresh_token,
-        token_type: token_response.token_type,
-        scope: token_response.scope.split_whitespace().map(String::from).collect(),
-        expires_at,
-        obtained_at: now,
-    };
+    let stored_token = token::StoredToken::from_response(
+        token_response.access_token,
+        token_response.refresh_token,
+        token_response.token_type,
+        &token_response.scope,
+        token_response.expires_in,
+    )?;
 
     token::save(&stored_token)?;
 
@@ -91,7 +81,7 @@ const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 /// - The config directory or client secret cannot be loaded
 /// - Token refresh fails
 /// - The new token cannot be saved
-pub async fn get_valid_token() -> Result<token::StoredToken> {
+pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToken> {
     let mut stored_token = token::load()?;
 
     let buffer = chrono::TimeDelta::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
@@ -99,10 +89,9 @@ pub async fn get_valid_token() -> Result<token::StoredToken> {
         debug!("Token expired or expiring soon, refreshing");
 
         let secret = config::load()?;
-        let client = reqwest::Client::new();
 
         let new_token = refresh::refresh_token(
-            &client,
+            http,
             &secret.installed.client_id,
             &secret.installed.client_secret,
             &stored_token,

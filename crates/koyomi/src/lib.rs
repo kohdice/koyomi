@@ -7,9 +7,9 @@ use tracing_subscriber::FmtSubscriber;
 
 use crate::cli::{Cli, Commands, Period};
 
-fn init_tracing(verbose: u8) {
+fn init_tracing(verbose: u8) -> Result<()> {
     let level = match verbose {
-        0 => return, // No logging
+        0 => return Ok(()),
         1 => Level::INFO,
         _ => Level::DEBUG,
     };
@@ -19,7 +19,8 @@ fn init_tracing(verbose: u8) {
         .with_target(false)
         .with_writer(std::io::stderr)
         .without_time()
-        .init();
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {e}"))
 }
 
 impl From<Period> for koyomi_core::calendar::EventPeriod {
@@ -39,11 +40,13 @@ impl From<Period> for koyomi_core::calendar::EventPeriod {
 /// Returns an error if any subcommand fails.
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.verbose);
+    init_tracing(cli.verbose)?;
+
+    let client = koyomi_core::Client::new();
 
     match cli.command {
         Some(Commands::Login) => {
-            koyomi_core::login().await?;
+            koyomi_core::login(client.http()).await?;
             Ok(())
         }
         Some(Commands::Logout) => {
@@ -51,18 +54,22 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
         Some(Commands::Events { period, calendar, details, limit }) => {
-            handle_events(period, calendar, details, limit).await
+            handle_events(&client, period, calendar, details, limit).await
         }
-        None => {
-            eprintln!("TUI mode is not yet implemented. Use a subcommand.");
-            eprintln!("Run `koyomi --help` for usage information.");
-            Err(anyhow::anyhow!("No subcommand specified"))
-        }
+        None => Err(anyhow::anyhow!(
+            "No subcommand specified. Run `koyomi --help` for usage information."
+        )),
     }
 }
 
-async fn handle_events(period: Period, calendar: String, details: bool, limit: u32) -> Result<()> {
-    let token = koyomi_core::auth::get_valid_token().await?;
+async fn handle_events(
+    client: &koyomi_core::Client,
+    period: Period,
+    calendar: String,
+    details: bool,
+    limit: u32,
+) -> Result<()> {
+    let token = koyomi_core::auth::get_valid_token(client.http()).await?;
 
     let config = koyomi_core::calendar::ListEventsConfig {
         calendar_id: calendar,
@@ -70,7 +77,6 @@ async fn handle_events(period: Period, calendar: String, details: bool, limit: u
         max_results: limit,
     };
 
-    let client = koyomi_core::Client::new();
     let events = client.list_events(&token, &config).await?;
 
     let mut stdout = std::io::stdout().lock();
