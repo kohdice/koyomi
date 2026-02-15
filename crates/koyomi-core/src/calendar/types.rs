@@ -54,8 +54,13 @@ impl<'de> Deserialize<'de> for EventDateTime {
         let raw = Raw::deserialize(deserializer)?;
 
         if let Some(date_time) = raw.date_time {
+            chrono::DateTime::parse_from_rfc3339(&date_time).map_err(|e| {
+                serde::de::Error::custom(format!("invalid dateTime '{date_time}': {e}"))
+            })?;
             Ok(EventDateTime::DateTime { date_time, time_zone: raw.time_zone })
         } else if let Some(date) = raw.date {
+            chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                .map_err(|e| serde::de::Error::custom(format!("invalid date '{date}': {e}")))?;
             Ok(EventDateTime::Date { date })
         } else {
             Err(serde::de::Error::custom(
@@ -480,5 +485,37 @@ mod tests {
     fn entry_point_type_unknown_value_deserializes_to_unknown() {
         let result = serde_json::from_str::<EntryPointType>("\"newType\"").unwrap();
         assert_eq!(result, EntryPointType::Unknown);
+    }
+
+    #[test]
+    fn event_date_time_rejects_invalid_rfc3339() {
+        let json = r#"{"dateTime": "not-a-date"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid dateTime"), "Expected 'invalid dateTime' in: {error}");
+    }
+
+    #[test]
+    fn event_date_time_rejects_invalid_date() {
+        let json = r#"{"date": "2025-13-40"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid date"), "Expected 'invalid date' in: {error}");
+    }
+
+    #[test]
+    fn event_date_time_accepts_valid_rfc3339() {
+        let json = r#"{"dateTime": "2025-12-09T10:00:00+09:00", "timeZone": "Asia/Tokyo"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn event_date_time_accepts_valid_date() {
+        let json = r#"{"date": "2025-12-09"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_ok());
     }
 }
