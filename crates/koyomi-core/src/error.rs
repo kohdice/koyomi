@@ -26,6 +26,10 @@ pub enum CalendarError {
     #[error("Server error (status {status}): {message}")]
     ServerError { status: u16, message: String },
 
+    /// Unexpected HTTP status code
+    #[error("Unexpected HTTP response (status {status}): {message}")]
+    UnexpectedStatus { status: u16, message: String },
+
     /// Invalid time or timezone conversion
     #[error("Invalid time: {0}")]
     InvalidTime(String),
@@ -167,5 +171,12 @@ mod tests {
         assert!(matches!(auth_error, Error::Auth(_)));
         assert!(matches!(calendar_error, Error::Calendar(_)));
         assert!(!matches!(calendar_error, Error::Auth(_)));
+    }
+
+    #[test]
+    fn calendar_error_unexpected_status_displays_message() {
+        let error =
+            CalendarError::UnexpectedStatus { status: 302, message: "redirect".to_string() };
+        assert_eq!(error.to_string(), "Unexpected HTTP response (status 302): redirect");
     }
 }
