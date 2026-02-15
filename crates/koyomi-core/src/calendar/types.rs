@@ -52,6 +52,9 @@ pub struct Attendee {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub response_status: Option<ResponseStatus>,
+    /// Whether this attendee is a resource (e.g. a meeting room)
+    #[serde(default)]
+    pub resource: bool,
 }
 
 /// Reminder settings for an event
@@ -265,6 +268,7 @@ mod tests {
         assert_eq!(event.attendees.len(), 1);
         assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
         assert_eq!(event.attendees[0].response_status, Some(ResponseStatus::Accepted));
+        assert!(!event.attendees[0].resource);
 
         let conference = event.conference_data.unwrap();
         assert_eq!(conference.entry_points.len(), 1);
@@ -323,6 +327,35 @@ mod tests {
         let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains("\"calendar\":\"Test Calendar\""));
         assert!(json.contains("\"events\":[]"));
+    }
+
+    #[test]
+    fn attendee_resource_flag_deserializes() {
+        let json = r#"[
+            {
+                "email": "room@resource.calendar.google.com",
+                "displayName": "Room A (10)",
+                "responseStatus": "accepted",
+                "resource": true
+            },
+            {
+                "email": "user@example.com",
+                "displayName": "User",
+                "responseStatus": "accepted",
+                "resource": false
+            },
+            {
+                "email": "user2@example.com",
+                "responseStatus": "needsAction"
+            }
+        ]"#;
+
+        let attendees: Vec<Attendee> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(attendees.len(), 3);
+        assert!(attendees[0].resource);
+        assert!(!attendees[1].resource);
+        assert!(!attendees[2].resource);
     }
 
     #[test]
