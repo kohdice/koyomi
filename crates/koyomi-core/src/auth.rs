@@ -8,16 +8,52 @@ use tracing::{debug, info, warn};
 
 use crate::{Error, Result, config};
 
-/// Execute the OAuth2 device authorization flow
+/// Information returned from the device authorization flow start.
+///
+/// Contains the URL and code that the user must use to authorize access.
+pub struct DeviceFlowSession {
+    verification_url: String,
+    user_code: String,
+    device_code: String,
+    interval: u64,
+    expires_in: u64,
+}
+
+impl DeviceFlowSession {
+    /// Returns the URL where the user should visit to authorize.
+    #[must_use]
+    pub fn verification_url(&self) -> &str {
+        &self.verification_url
+    }
+
+    /// Returns the code the user must enter at the verification URL.
+    #[must_use]
+    pub fn user_code(&self) -> &str {
+        &self.user_code
+    }
+}
+
+/// Result of a logout operation.
+pub enum LogoutResult {
+    /// Successfully logged out and token was removed.
+    LoggedOut,
+    /// No token was found; user was not logged in.
+    NotLoggedIn,
+    /// Token file was corrupt and has been removed.
+    CorruptTokenRemoved,
+}
+
+/// Start the OAuth2 device authorization flow.
+///
+/// Returns a [`DeviceFlowSession`] with information that should be displayed
+/// to the user (verification URL and user code).
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The client secret configuration cannot be loaded
 /// - The device code request fails
-/// - Token polling times out or is denied
-/// - The token cannot be saved
-pub async fn login(client: &crate::client::Client) -> Result<()> {
+pub async fn start_login(client: &crate::client::Client) -> Result<DeviceFlowSession> {
     let secret = config::load()?;
     info!("Loaded OAuth2 client configuration");
 
@@ -29,22 +65,33 @@ pub async fn login(client: &crate::client::Client) -> Result<()> {
     )
     .await?;
 
-    eprintln!();
-    eprintln!("To sign in, please visit: {}", device_response.verification_url);
-    eprintln!("Enter this code: {}", device_response.user_code);
-    eprintln!();
+    Ok(DeviceFlowSession {
+        verification_url: device_response.verification_url,
+        user_code: device_response.user_code,
+        device_code: device_response.device_code,
+        interval: device_response.interval,
+        expires_in: device_response.expires_in,
+    })
+}
 
-    if let Err(e) = open::that(&device_response.verification_url) {
-        warn!("Could not open browser automatically: {}", e);
-        eprintln!("Could not open browser automatically. Please open the URL above manually.");
-    }
-
-    eprintln!("Waiting for authorization...");
+/// Complete the OAuth2 device authorization flow by polling for user authorization.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Token polling times out or is denied
+/// - The token cannot be saved
+/// - The server did not return a refresh token
+pub async fn complete_login(
+    client: &crate::client::Client,
+    session: &DeviceFlowSession,
+) -> Result<()> {
+    let secret = config::load()?;
 
     let poll_config = device_flow::PollConfig {
         token_url: device_flow::TOKEN_URL.to_string(),
-        initial_interval: device_response.interval,
-        expires_in: device_response.expires_in,
+        initial_interval: session.interval,
+        expires_in: session.expires_in,
     };
 
     debug!("Starting token polling");
@@ -52,7 +99,7 @@ pub async fn login(client: &crate::client::Client) -> Result<()> {
         client.http(),
         &secret.installed.client_id,
         &secret.installed.client_secret,
-        &device_response.device_code,
+        &session.device_code,
         &poll_config,
     )
     .await?;
@@ -75,9 +122,6 @@ pub async fn login(client: &crate::client::Client) -> Result<()> {
 
     let token_path = token::path()?;
     token::save(&stored_token, &token_path)?;
-
-    eprintln!();
-    eprintln!("Successfully logged in!");
 
     Ok(())
 }
@@ -124,31 +168,27 @@ pub async fn get_valid_token(client: &crate::client::Client) -> Result<token::St
     Ok(stored_token)
 }
 
-/// Remove stored tokens
+/// Remove stored tokens.
+///
+/// Returns a [`LogoutResult`] indicating what happened.
 ///
 /// # Errors
 ///
 /// Returns an error if the token file exists but cannot be deleted.
-pub fn logout() -> Result<()> {
+pub fn logout() -> Result<LogoutResult> {
     let token_path = token::path()?;
     match token::load(&token_path) {
         Ok(_) => {
             token::delete(&token_path)?;
             info!("Token file has been removed");
-            eprintln!("Successfully logged out.");
+            Ok(LogoutResult::LoggedOut)
         }
-        Err(Error::TokenNotFound) => {
-            eprintln!("Not currently logged in.");
-        }
+        Err(Error::TokenNotFound) => Ok(LogoutResult::NotLoggedIn),
         Err(e) => {
             warn!("Token file is corrupt or unreadable: {}", e);
             token::delete(&token_path)?;
             info!("Corrupt token file has been removed");
-            eprintln!(
-                "Token file was corrupt and has been removed. Please run 'koyomi login' again."
-            );
+            Ok(LogoutResult::CorruptTokenRemoved)
         }
     }
-
-    Ok(())
 }

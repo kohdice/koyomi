@@ -12,6 +12,10 @@ pub struct Cli {
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
+    /// Suppress informational messages
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -142,5 +146,30 @@ mod tests {
             }
             _ => panic!("Expected Events command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_quiet_flag() {
+        let cli = Cli::parse_from(["koyomi", "--quiet", "login"]);
+        assert!(cli.quiet);
+        assert_eq!(cli.verbose, 0);
+    }
+
+    #[test]
+    fn cli_parses_quiet_short_flag() {
+        let cli = Cli::parse_from(["koyomi", "-q", "logout"]);
+        assert!(cli.quiet);
+    }
+
+    #[test]
+    fn cli_quiet_conflicts_with_verbose() {
+        let result = Cli::try_parse_from(["koyomi", "-q", "-v", "events"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_defaults_quiet_to_false() {
+        let cli = Cli::parse_from(["koyomi", "events"]);
+        assert!(!cli.quiet);
     }
 }

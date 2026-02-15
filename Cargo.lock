@@ -889,6 +889,7 @@ dependencies = [
  "clap",
  "koyomi-core",
  "koyomi-ui",
+ "open",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -900,7 +901,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs",
- "open",
  "reqwest",
  "serde",
  "serde_json",
