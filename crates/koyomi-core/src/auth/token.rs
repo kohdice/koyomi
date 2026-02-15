@@ -63,6 +63,11 @@ impl StoredToken {
     }
 
     #[must_use]
+    pub fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
+    }
+
+    #[must_use]
     pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
@@ -111,6 +116,8 @@ pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
             OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
+        // mode() は新規作成時のみ適用される。既存ファイルを truncate で開いた場合は
+        // 元の権限が維持されるため、set_permissions で明示的に 0o600 を設定する。
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
 
@@ -379,5 +386,25 @@ mod tests {
     fn access_token_accessor_returns_value() {
         let token = create_test_token();
         assert_eq!(token.access_token(), "test_access_token");
+    }
+
+    #[test]
+    fn refresh_token_accessor_returns_value() {
+        let token = create_test_token();
+        assert_eq!(token.refresh_token(), Some("test_refresh_token"));
+    }
+
+    #[test]
+    fn refresh_token_accessor_returns_none_when_absent() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test".to_string(),
+            refresh_token: None,
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now + TimeDelta::hours(1),
+            obtained_at: now,
+        };
+        assert_eq!(token.refresh_token(), None);
     }
 }
