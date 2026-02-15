@@ -49,8 +49,8 @@ pub async fn run() -> Result<()> {
             koyomi_core::logout().await?;
             Ok(())
         }
-        Some(Commands::Events { period, calendar, details }) => {
-            handle_events(period, calendar, details).await
+        Some(Commands::Events { period, calendar, details, limit }) => {
+            handle_events(period, calendar, details, limit).await
         }
         None => {
             eprintln!("TUI mode is not yet implemented. Use a subcommand.");
@@ -60,12 +60,13 @@ pub async fn run() -> Result<()> {
     }
 }
 
-async fn handle_events(period: Period, calendar: String, details: bool) -> Result<()> {
+async fn handle_events(period: Period, calendar: String, details: bool, limit: u32) -> Result<()> {
     let token = koyomi_core::auth::get_valid_token().await?;
 
     let config = koyomi_core::calendar::ListEventsConfig {
         calendar_id: calendar,
         period: convert_period(period),
+        max_results: limit,
     };
 
     let client = koyomi_core::Client::new();
