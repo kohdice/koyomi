@@ -17,6 +17,7 @@ pub struct DeviceFlowSession {
     device_code: String,
     interval: u64,
     expires_in: u64,
+    pub(crate) secret: config::ClientSecretFile,
 }
 
 impl DeviceFlowSession {
@@ -71,6 +72,7 @@ pub async fn start_login(client: &crate::client::Client) -> Result<DeviceFlowSes
         device_code: device_response.device_code,
         interval: device_response.interval,
         expires_in: device_response.expires_in,
+        secret,
     })
 }
 
@@ -86,19 +88,17 @@ pub async fn complete_login(
     client: &crate::client::Client,
     session: &DeviceFlowSession,
 ) -> Result<()> {
-    let secret = config::load()?;
-
-    let poll_config = device_flow::PollConfig {
-        token_url: device_flow::TOKEN_URL.to_string(),
-        initial_interval: session.interval,
-        expires_in: session.expires_in,
-    };
+    let poll_config = device_flow::PollConfig::new(
+        device_flow::TOKEN_URL.to_string(),
+        session.interval,
+        session.expires_in,
+    );
 
     debug!("Starting token polling");
     let token_response = device_flow::poll(
         client.http(),
-        &secret.installed.client_id,
-        &secret.installed.client_secret,
+        &session.secret.installed.client_id,
+        &session.secret.installed.client_secret,
         &session.device_code,
         &poll_config,
     )
