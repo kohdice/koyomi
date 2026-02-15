@@ -1,4 +1,3 @@
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -65,35 +64,34 @@ pub async fn refresh_token(
         .await?;
 
     if !response.status().is_success() {
-        let error: RefreshErrorResponse = response.json().await?;
-        return Err(Error::Auth(format!(
-            "Failed to refresh token: {} - {}",
-            error.error,
-            error.error_description.unwrap_or_default()
-        )));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let message = match serde_json::from_str::<RefreshErrorResponse>(&body) {
+            Ok(error) => format!(
+                "Failed to refresh token: {} - {}",
+                error.error,
+                error.error_description.unwrap_or_default()
+            ),
+            Err(_) => format!("Failed to refresh token (HTTP {status}): {body}"),
+        };
+        return Err(Error::Auth(message));
     }
 
     let refresh_response: RefreshResponse = response.json().await?;
 
-    let now = Utc::now();
-    let expires_in_secs = i64::try_from(refresh_response.expires_in)
-        .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
-    let expires_at = now + chrono::TimeDelta::seconds(expires_in_secs);
-
-    Ok(StoredToken {
-        access_token: refresh_response.access_token,
-        refresh_token: token.refresh_token.clone(),
-        token_type: refresh_response.token_type,
-        scope: refresh_response.scope.split_whitespace().map(String::from).collect(),
-        expires_at,
-        obtained_at: now,
-    })
+    StoredToken::from_response(
+        refresh_response.access_token,
+        token.refresh_token.clone(),
+        refresh_response.token_type,
+        &refresh_response.scope,
+        refresh_response.expires_in,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeDelta;
+    use chrono::{TimeDelta, Utc};
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

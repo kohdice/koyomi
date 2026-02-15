@@ -71,12 +71,17 @@ pub async fn start(
         .await?;
 
     if !response.status().is_success() {
-        let error: TokenErrorResponse = response.json().await?;
-        return Err(Error::Auth(format!(
-            "Failed to get device code: {} - {}",
-            error.error,
-            error.error_description.unwrap_or_default()
-        )));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let message = match serde_json::from_str::<TokenErrorResponse>(&body) {
+            Ok(error) => format!(
+                "Failed to get device code: {} - {}",
+                error.error,
+                error.error_description.unwrap_or_default()
+            ),
+            Err(_) => format!("Failed to get device code (HTTP {status}): {body}"),
+        };
+        return Err(Error::Auth(message));
     }
 
     Ok(response.json().await?)
@@ -130,31 +135,35 @@ pub async fn poll(
             .send()
             .await?;
 
+        let status = response.status();
         let body = response.text().await?;
 
-        if let Ok(error) = serde_json::from_str::<TokenErrorResponse>(&body) {
-            match error.error.as_str() {
-                "authorization_pending" => continue,
-                "slow_down" => {
-                    interval += 5;
-                    continue;
-                }
-                "access_denied" => {
-                    return Err(Error::Auth("Access denied by user.".into()));
-                }
-                "expired_token" => {
-                    return Err(Error::Auth(
-                        "Device code expired. Please run 'koyomi login' again.".into(),
-                    ));
-                }
-                _ => {
-                    return Err(Error::Auth(format!(
-                        "Token request failed: {} - {}",
-                        error.error,
-                        error.error_description.unwrap_or_default()
-                    )));
+        if !status.is_success() {
+            if let Ok(error) = serde_json::from_str::<TokenErrorResponse>(&body) {
+                match error.error.as_str() {
+                    "authorization_pending" => continue,
+                    "slow_down" => {
+                        interval += 5;
+                        continue;
+                    }
+                    "access_denied" => {
+                        return Err(Error::Auth("Access denied by user.".into()));
+                    }
+                    "expired_token" => {
+                        return Err(Error::Auth(
+                            "Device code expired. Please run 'koyomi login' again.".into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(Error::Auth(format!(
+                            "Token request failed: {} - {}",
+                            error.error,
+                            error.error_description.unwrap_or_default()
+                        )));
+                    }
                 }
             }
+            return Err(Error::Auth(format!("Token request failed (HTTP {status}): {body}",)));
         }
 
         let token: TokenResponse = serde_json::from_str(&body)?;

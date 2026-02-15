@@ -20,6 +20,31 @@ pub struct StoredToken {
 }
 
 impl StoredToken {
+    /// Construct a `StoredToken` from an OAuth2 token response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `expires_in` exceeds the range of `i64`.
+    pub fn from_response(
+        access_token: String,
+        refresh_token: Option<String>,
+        token_type: String,
+        scope_str: &str,
+        expires_in: u64,
+    ) -> crate::Result<Self> {
+        let now = Utc::now();
+        let expires_in_secs = i64::try_from(expires_in)
+            .map_err(|_| crate::Error::Auth("Token expiration time overflow".into()))?;
+        Ok(Self {
+            access_token,
+            refresh_token,
+            token_type,
+            scope: scope_str.split_whitespace().map(String::from).collect(),
+            expires_at: now + chrono::TimeDelta::seconds(expires_in_secs),
+            obtained_at: now,
+        })
+    }
+
     pub fn is_expired(&self) -> bool {
         Utc::now() >= self.expires_at
     }
@@ -43,7 +68,15 @@ impl StoredToken {
 /// - File permissions cannot be set (Unix only)
 pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::create_dir_all(parent)?;
+        }
     }
 
     let content = serde_json::to_string_pretty(token)?;
@@ -79,7 +112,13 @@ pub fn load_from_path(path: &Path) -> Result<StoredToken> {
     let content = fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound { Error::TokenNotFound } else { Error::Io(e) }
     })?;
-    let token: StoredToken = serde_json::from_str(&content)?;
+    let token: StoredToken = serde_json::from_str(&content).map_err(|e| {
+        Error::Auth(format!(
+            "Corrupt token file at {}: {}. Try running 'koyomi logout' then 'koyomi login' to fix.",
+            path.display(),
+            e
+        ))
+    })?;
 
     Ok(token)
 }
@@ -101,7 +140,7 @@ fn token_path() -> Result<std::path::PathBuf> {
     Ok(config::config_dir()?.join(TOKEN_FILE))
 }
 
-/// Save token to `~/.config/koyomi/google_tokens.json`
+/// Save token to the default token file path
 ///
 /// # Errors
 ///
@@ -117,7 +156,7 @@ pub fn save(token: &StoredToken) -> Result<()> {
     Ok(())
 }
 
-/// Load token from `~/.config/koyomi/google_tokens.json`
+/// Load token from the default token file path
 ///
 /// # Errors
 ///
@@ -130,7 +169,7 @@ pub fn load() -> Result<StoredToken> {
     load_from_path(&token_path()?)
 }
 
-/// Delete token from `~/.config/koyomi/google_tokens.json`
+/// Delete the default token file
 ///
 /// # Errors
 ///
