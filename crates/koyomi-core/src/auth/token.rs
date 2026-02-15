@@ -9,7 +9,7 @@ use crate::{Error, Result, config};
 
 const TOKEN_FILE: &str = "google_tokens.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredToken {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -17,6 +17,19 @@ pub struct StoredToken {
     pub scope: Vec<String>,
     pub expires_at: DateTime<Utc>,
     pub obtained_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field("token_type", &self.token_type)
+            .field("scope", &self.scope)
+            .field("expires_at", &self.expires_at)
+            .field("obtained_at", &self.obtained_at)
+            .finish()
+    }
 }
 
 impl StoredToken {
@@ -355,5 +368,16 @@ mod tests {
 
         // Token expires in 1 hour, so 5-minute buffer should not consider it expired
         assert!(!token.is_expired_with_buffer(TimeDelta::minutes(5)));
+    }
+
+    #[test]
+    fn debug_masks_sensitive_fields() {
+        let token = create_test_token();
+        let debug_output = format!("{:?}", token);
+
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("test_access_token"));
+        assert!(!debug_output.contains("test_refresh_token"));
+        assert!(debug_output.contains("Bearer"));
     }
 }
