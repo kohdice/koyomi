@@ -77,7 +77,6 @@ pub async fn login() -> Result<()> {
     Ok(())
 }
 
-/// Default buffer duration for token refresh (5 minutes)
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
 /// Get a valid access token, refreshing if necessary

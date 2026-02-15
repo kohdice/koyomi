@@ -22,7 +22,6 @@ fn init_tracing(verbose: u8) {
         .init();
 }
 
-/// Convert CLI Period to koyomi_core EventPeriod
 fn convert_period(period: Period) -> koyomi_core::calendar::EventPeriod {
     match period {
         Period::Day => koyomi_core::calendar::EventPeriod::Day,

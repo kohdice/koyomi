@@ -5,7 +5,6 @@ use tracing::{debug, info};
 use super::types::{CalendarEvents, Event, EventPeriod};
 use crate::{CalendarError, Result};
 
-/// Base URL for Google Calendar API
 pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
 /// Fields to request from Calendar info endpoint (Partial Response)
@@ -38,12 +37,10 @@ pub const MAX_RESULTS_LIMIT: u32 = 2500;
 /// Default value for `max_results` (matches Google Calendar API default)
 const DEFAULT_MAX_RESULTS: u32 = 250;
 
-/// Configuration for listing calendar events
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
     /// Calendar ID (default: "primary")
     pub calendar_id: String,
-    /// Time period to fetch events for
     pub period: EventPeriod,
     /// Maximum number of events to return (1..=2500)
     pub max_results: u32,
@@ -59,7 +56,6 @@ impl Default for ListEventsConfig {
     }
 }
 
-/// Paginated response from Google Calendar Events API
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageResponse {
@@ -67,13 +63,11 @@ struct PageResponse {
     next_page_token: Option<String>,
 }
 
-/// Response from Google Calendar API for calendar info
 #[derive(Debug, Deserialize)]
 struct CalendarInfo {
     summary: Option<String>,
 }
 
-/// Convert HTTP status code to CalendarError
 fn status_to_calendar_error(
     status: reqwest::StatusCode,
     body: String,

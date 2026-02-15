@@ -20,7 +20,6 @@ pub struct StoredToken {
 }
 
 impl StoredToken {
-    /// Check if the token has expired
     pub fn is_expired(&self) -> bool {
         Utc::now() >= self.expires_at
     }
@@ -95,7 +94,6 @@ pub fn delete_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Get the path to the token file
 fn token_path() -> Result<std::path::PathBuf> {
     Ok(config::config_dir()?.join(TOKEN_FILE))
 }
@@ -230,7 +228,6 @@ mod tests {
         let metadata = fs::metadata(&path).unwrap();
         let mode = metadata.permissions().mode();
 
-        // Check that the file is only readable/writable by owner (0600)
         assert_eq!(mode & 0o777, 0o600);
     }
 

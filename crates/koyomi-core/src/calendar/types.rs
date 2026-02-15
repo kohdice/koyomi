@@ -1,13 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-/// Calendar name and associated events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarEvents {
     pub calendar: String,
     pub events: Vec<Event>,
 }
 
-/// Calendar event with all relevant fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
@@ -25,7 +23,6 @@ pub struct Event {
     pub html_link: Option<String>,
 }
 
-/// Event date/time representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDateTime {
@@ -34,7 +31,6 @@ pub struct EventDateTime {
     pub time_zone: Option<String>,
 }
 
-/// Event organizer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Organizer {
@@ -45,7 +41,6 @@ pub struct Organizer {
     pub is_self: Option<bool>,
 }
 
-/// Event attendee information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attendee {
@@ -57,7 +52,6 @@ pub struct Attendee {
     pub resource: bool,
 }
 
-/// Reminder settings for an event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reminders {
@@ -66,14 +60,12 @@ pub struct Reminders {
     pub overrides: Vec<ReminderOverride>,
 }
 
-/// Individual reminder override
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderOverride {
     pub method: String,
     pub minutes: i32,
 }
 
-/// Conference/meeting information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConferenceData {
@@ -82,7 +74,6 @@ pub struct ConferenceData {
     pub conference_solution: Option<ConferenceSolution>,
 }
 
-/// Entry point for joining a conference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryPoint {
@@ -96,20 +87,16 @@ pub struct ConferenceSolution {
     pub name: String,
 }
 
-/// Event status indicating whether the event is confirmed, tentative, or cancelled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EventStatus {
-    /// The event is confirmed
     Confirmed,
     /// The event is tentatively confirmed
     Tentative,
-    /// The event is cancelled
     Cancelled,
 }
 
 impl EventStatus {
-    /// Returns the status as a lowercase string
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -126,15 +113,12 @@ impl EventStatus {
 pub enum ResponseStatus {
     /// The attendee has not responded
     NeedsAction,
-    /// The attendee has declined the invitation
     Declined,
     /// The attendee has tentatively accepted
     Tentative,
-    /// The attendee has accepted the invitation
     Accepted,
 }
 
-/// Time period for event listing
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPeriod {
     /// Today only

@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-/// Calendar API specific error types
 #[derive(Debug, Error)]
 pub enum CalendarError {
     /// Calendar or event not found (HTTP 404)

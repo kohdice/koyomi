@@ -11,7 +11,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// Creates a new `Client` with default HTTP settings.
     #[must_use]
     pub fn new() -> Self {
         Self { http: reqwest::Client::new() }
