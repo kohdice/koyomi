@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use rand::Rng;
 use tracing::warn;
 
 use crate::Result;
@@ -10,9 +11,14 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_RETRIES: u32 = 3;
 
 /// Type-safe wrapper for OAuth2 access tokens.
-pub(crate) struct AccessToken<'a>(pub(crate) &'a str);
+pub(crate) struct AccessToken<'a>(&'a str);
 
 impl<'a> AccessToken<'a> {
+    pub(crate) fn new(token: &'a str) -> Self {
+        debug_assert!(!token.is_empty(), "access token must not be empty");
+        Self(token)
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         self.0
     }
@@ -66,20 +72,23 @@ impl Client {
                 }
 
                 // Retry-After ヘッダーがあれば尊重する（RFC 7231 Section 7.1.3）
+                // 整数秒 or HTTP-date（RFC 2822）の両形式に対応
                 let retry_after_ms = response
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .map(|secs| secs * 1000);
+                    .and_then(|v| {
+                        v.parse::<u64>().map(|secs| secs * 1000).ok().or_else(|| {
+                            chrono::DateTime::parse_from_rfc2822(v).ok().and_then(|date| {
+                                let diff = date.signed_duration_since(chrono::Utc::now());
+                                u64::try_from(diff.num_milliseconds().max(0)).ok()
+                            })
+                        })
+                    });
 
-                // Exponential backoff（初期1秒）+ full jitter（新規依存なし）
+                // Exponential backoff（初期1秒）+ full jitter（CSPRNG ベース）
                 let base_ms = 1000 * 2u64.pow(retries - 1);
-                let jitter_nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as u64;
-                let backoff_ms = base_ms / 2 + (jitter_nanos % (base_ms / 2 + 1));
+                let backoff_ms = rand::rng().random_range(0..=base_ms);
                 let wait_ms = retry_after_ms.map_or(backoff_ms, |ra| ra.max(backoff_ms));
 
                 warn!("HTTP {status} — retrying in {wait_ms}ms (attempt {retries}/{MAX_RETRIES})");
@@ -104,7 +113,7 @@ impl Client {
         token: &StoredToken,
         config: &ListEventsConfig,
     ) -> Result<CalendarEvents> {
-        let access_token = AccessToken(token.access_token());
+        let access_token = AccessToken::new(token.access_token());
         calendar::list_events(self, &access_token, config, calendar::CALENDAR_API_BASE_URL).await
     }
 }
