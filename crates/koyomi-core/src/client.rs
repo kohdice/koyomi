@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use rand::Rng;
 use tracing::warn;
 
 use crate::Result;
@@ -15,7 +14,7 @@ pub(crate) struct AccessToken<'a>(&'a str);
 
 impl<'a> AccessToken<'a> {
     pub(crate) fn new(token: &'a str) -> Self {
-        debug_assert!(!token.is_empty(), "access token must not be empty");
+        assert!(!token.is_empty(), "access token must not be empty");
         Self(token)
     }
 
@@ -43,6 +42,7 @@ impl Client {
     pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(10))
             .user_agent(format!("koyomi/{}", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self { http })
@@ -62,7 +62,13 @@ impl Client {
     ) -> std::result::Result<reqwest::Response, reqwest::Error> {
         let mut retries = 0u32;
         loop {
-            let response = self.http.get(url).bearer_auth(access_token.as_str()).send().await?;
+            let response = self
+                .http
+                .get(url)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .bearer_auth(access_token.as_str())
+                .send()
+                .await?;
 
             let status = response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
@@ -88,7 +94,7 @@ impl Client {
 
                 // Exponential backoff（初期1秒）+ full jitter（CSPRNG ベース）
                 let base_ms = 1000 * 2u64.pow(retries - 1);
-                let backoff_ms = rand::rng().random_range(0..=base_ms);
+                let backoff_ms = rand::random_range(0..=base_ms);
                 let wait_ms = retry_after_ms.map_or(backoff_ms, |ra| ra.max(backoff_ms));
 
                 warn!("HTTP {status} — retrying in {wait_ms}ms (attempt {retries}/{MAX_RETRIES})");
