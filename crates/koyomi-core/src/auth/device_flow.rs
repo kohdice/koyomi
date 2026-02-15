@@ -72,13 +72,15 @@ pub async fn start(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         let message = match serde_json::from_str::<TokenErrorResponse>(&body) {
-            Ok(error) => format!(
-                "Failed to get device code: {} - {}",
-                error.error,
-                error.error_description.unwrap_or_default()
-            ),
+            Ok(error) => match error.error_description {
+                Some(desc) => format!("Failed to get device code: {} - {}", error.error, desc),
+                None => format!("Failed to get device code: {}", error.error),
+            },
             Err(_) => format!("Failed to get device code (HTTP {status}): {body}"),
         };
         return Err(Error::Auth(message));
@@ -116,8 +118,9 @@ pub async fn poll(
     device_code: &str,
     config: &PollConfig,
 ) -> Result<TokenResponse> {
-    // Use std::time::Instant for real wall-clock timeout measurement
-    // This ensures timeout works correctly even in tests with tokio::time::pause()
+    // Use std::time::Instant for real wall-clock timeout measurement.
+    // tokio::time::Instant would be auto-advanced by internal timers in
+    // reqwest/hyper when tokio::time::pause() is active, causing spurious timeouts.
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(config.expires_in);
     let mut interval = config.initial_interval;
@@ -155,11 +158,13 @@ pub async fn poll(
                         ));
                     }
                     _ => {
-                        return Err(Error::Auth(format!(
-                            "Token request failed: {} - {}",
-                            error.error,
-                            error.error_description.unwrap_or_default()
-                        )));
+                        let message = match error.error_description {
+                            Some(desc) => {
+                                format!("Token request failed: {} - {}", error.error, desc)
+                            }
+                            None => format!("Token request failed: {}", error.error),
+                        };
+                        return Err(Error::Auth(message));
                     }
                 }
             }

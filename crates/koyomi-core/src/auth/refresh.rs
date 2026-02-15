@@ -65,13 +65,15 @@ pub async fn refresh_token(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         let message = match serde_json::from_str::<RefreshErrorResponse>(&body) {
-            Ok(error) => format!(
-                "Failed to refresh token: {} - {}",
-                error.error,
-                error.error_description.unwrap_or_default()
-            ),
+            Ok(error) => match error.error_description {
+                Some(desc) => format!("Failed to refresh token: {} - {}", error.error, desc),
+                None => format!("Failed to refresh token: {}", error.error),
+            },
             Err(_) => format!("Failed to refresh token (HTTP {status}): {body}"),
         };
         return Err(Error::Auth(message));
