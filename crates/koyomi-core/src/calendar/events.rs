@@ -3,6 +3,7 @@ use serde::Deserialize;
 use tracing::{debug, info};
 
 use super::types::{CalendarEvents, Event, EventPeriod};
+use crate::client::AccessToken;
 use crate::{CalendarError, Result};
 
 pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -91,19 +92,36 @@ struct CalendarInfo {
     summary: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct GoogleApiError {
+    error: GoogleApiErrorBody,
+}
+
+#[derive(Deserialize)]
+struct GoogleApiErrorBody {
+    message: String,
+}
+
+fn extract_error_message(body: &str) -> String {
+    serde_json::from_str::<GoogleApiError>(body)
+        .map(|e| e.error.message)
+        .unwrap_or_else(|_| body.to_string())
+}
+
 fn status_to_calendar_error(
     status: reqwest::StatusCode,
     body: String,
     calendar_id: &str,
 ) -> CalendarError {
+    let message = extract_error_message(&body);
     match status.as_u16() {
         401 => CalendarError::Unauthenticated,
         403 => CalendarError::Forbidden { calendar_id: calendar_id.to_string() },
         404 => CalendarError::NotFound { calendar_id: calendar_id.to_string() },
         429 => CalendarError::RateLimitExceeded,
-        400 => CalendarError::BadRequest { message: body },
-        status if status >= 500 => CalendarError::ServerError { status, message: body },
-        status => CalendarError::UnexpectedStatus { status, message: body },
+        400 => CalendarError::BadRequest { message },
+        status if status >= 500 => CalendarError::ServerError { status, message },
+        status => CalendarError::UnexpectedStatus { status, message },
     }
 }
 
@@ -116,7 +134,7 @@ fn status_to_calendar_error(
 /// - The server returns an error response
 pub(crate) async fn get_calendar_name(
     client: &crate::client::Client,
-    access_token: &str,
+    access_token: &AccessToken<'_>,
     calendar_id: &str,
     base_url: &str,
 ) -> Result<String> {
@@ -124,7 +142,7 @@ pub(crate) async fn get_calendar_name(
         "{}/{}?fields={}",
         base_url,
         urlencoding::encode(calendar_id),
-        CALENDAR_INFO_FIELDS
+        urlencoding::encode(CALENDAR_INFO_FIELDS)
     );
 
     debug!("Fetching calendar info: {}", url);
@@ -191,7 +209,7 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 /// - The server returns an error response
 pub(crate) async fn list_events(
     client: &crate::client::Client,
-    access_token: &str,
+    access_token: &AccessToken<'_>,
     config: &ListEventsConfig,
     base_url: &str,
 ) -> Result<CalendarEvents> {
@@ -212,9 +230,6 @@ pub(crate) async fn list_events(
             tracing::warn!(
                 "Pagination exceeded {} pages; stopping to prevent infinite loop",
                 MAX_PAGES
-            );
-            eprintln!(
-                "Warning: pagination limit ({MAX_PAGES} pages) reached; results may be incomplete."
             );
             break;
         }
@@ -275,6 +290,7 @@ pub(crate) async fn list_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::AccessToken;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -322,7 +338,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let token = AccessToken("test_token");
+        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "My Calendar");
@@ -339,7 +356,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let token = AccessToken("test_token");
+        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "primary");
@@ -356,7 +374,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let token = AccessToken("test_token");
+        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -404,7 +423,8 @@ mod tests {
 
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
+        let result =
+            list_events(&client, &AccessToken("test_token"), &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -458,7 +478,8 @@ mod tests {
 
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
+        let result =
+            list_events(&client, &AccessToken("test_token"), &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -531,8 +552,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let result =
-            get_calendar_name(&client, "invalid_token", "primary", &mock_server.uri()).await;
+        let token = AccessToken("invalid_token");
+        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -550,9 +571,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
+        let token = AccessToken("test_token");
         let result =
-            get_calendar_name(&client, "test_token", "private@example.com", &mock_server.uri())
-                .await;
+            get_calendar_name(&client, &token, "private@example.com", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -615,8 +636,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
+        let token = AccessToken("token");
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, "token").await.unwrap();
+        let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 200);
     }
 
@@ -638,8 +660,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
+        let token = AccessToken("token");
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, "token").await.unwrap();
+        let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 200);
     }
 
@@ -654,8 +677,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
+        let token = AccessToken("token");
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, "token").await.unwrap();
+        let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 503);
     }
 }

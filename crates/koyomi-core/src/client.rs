@@ -9,10 +9,20 @@ use crate::calendar::{self, CalendarEvents, ListEventsConfig};
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_RETRIES: u32 = 3;
 
+/// Type-safe wrapper for OAuth2 access tokens.
+pub(crate) struct AccessToken<'a>(pub(crate) &'a str);
+
+impl<'a> AccessToken<'a> {
+    pub(crate) fn as_str(&self) -> &str {
+        self.0
+    }
+}
+
 /// High-level API client for Google Calendar operations.
 ///
 /// Wraps an HTTP client and provides retry with exponential backoff
 /// for transient errors (HTTP 429, 5xx).
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
 }
@@ -42,11 +52,11 @@ impl Client {
     pub(crate) async fn get(
         &self,
         url: &str,
-        access_token: &str,
+        access_token: &AccessToken<'_>,
     ) -> std::result::Result<reqwest::Response, reqwest::Error> {
         let mut retries = 0u32;
         loop {
-            let response = self.http.get(url).bearer_auth(access_token).send().await?;
+            let response = self.http.get(url).bearer_auth(access_token.as_str()).send().await?;
 
             let status = response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
@@ -54,8 +64,25 @@ impl Client {
                 if retries > MAX_RETRIES {
                     return Ok(response);
                 }
-                let wait_ms = 500 * 2u64.pow(retries - 1);
-                warn!("HTTP {status} — retrying in {wait_ms}ms (attempt {retries}/{MAX_RETRIES})",);
+
+                // Retry-After ヘッダーがあれば尊重する（RFC 7231 Section 7.1.3）
+                let retry_after_ms = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|secs| secs * 1000);
+
+                // Exponential backoff（初期1秒）+ full jitter（新規依存なし）
+                let base_ms = 1000 * 2u64.pow(retries - 1);
+                let jitter_nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64;
+                let backoff_ms = base_ms / 2 + (jitter_nanos % (base_ms / 2 + 1));
+                let wait_ms = retry_after_ms.map_or(backoff_ms, |ra| ra.max(backoff_ms));
+
+                warn!("HTTP {status} — retrying in {wait_ms}ms (attempt {retries}/{MAX_RETRIES})");
                 tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
                 continue;
             }
@@ -77,7 +104,7 @@ impl Client {
         token: &StoredToken,
         config: &ListEventsConfig,
     ) -> Result<CalendarEvents> {
-        calendar::list_events(self, token.access_token(), config, calendar::CALENDAR_API_BASE_URL)
-            .await
+        let access_token = AccessToken(token.access_token());
+        calendar::list_events(self, &access_token, config, calendar::CALENDAR_API_BASE_URL).await
     }
 }
