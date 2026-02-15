@@ -18,6 +18,7 @@ const CALENDAR_INFO_FIELDS: &str = "summary";
 const EVENTS_LIST_FIELDS: &str = "\
     nextPageToken,\
     items(\
+        id,\
         summary,\
         status,\
         organizer(email,displayName,self),\
@@ -36,6 +37,9 @@ pub const MAX_RESULTS_LIMIT: u32 = 2500;
 
 /// Default value for `max_results` (matches Google Calendar API default)
 const DEFAULT_MAX_RESULTS: u32 = 250;
+
+/// Maximum number of pagination requests as a safeguard against infinite loops
+const MAX_PAGES: u32 = 50;
 
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
@@ -106,12 +110,14 @@ pub async fn get_calendar_name(
 
     debug!("Fetching calendar info: {}", url);
 
-    let response =
-        client.get(&url).header("Authorization", format!("Bearer {}", access_token)).send().await?;
+    let response = client.get(&url).bearer_auth(access_token).send().await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
@@ -175,8 +181,18 @@ pub async fn list_events(
 
     let mut all_events: Vec<Event> = Vec::new();
     let mut page_token: Option<String> = None;
+    let mut page_count: u32 = 0;
 
     loop {
+        page_count += 1;
+        if page_count > MAX_PAGES {
+            tracing::warn!(
+                "Pagination exceeded {} pages; stopping to prevent infinite loop",
+                MAX_PAGES
+            );
+            break;
+        }
+
         let mut url = format!(
             "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&fields={}",
             base_url,
@@ -193,15 +209,14 @@ pub async fn list_events(
 
         debug!("Fetching events: {}", url);
 
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await?;
+        let response = client.get(&url).bearer_auth(access_token).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 

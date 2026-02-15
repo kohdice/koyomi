@@ -104,6 +104,7 @@ mod tests {
         CalendarEvents {
             calendar: "Test Calendar".to_string(),
             events: vec![Event {
+                id: None,
                 summary: Some("Meeting".to_string()),
                 status: Some(EventStatus::Confirmed),
                 organizer: Some(Organizer {
@@ -189,6 +190,7 @@ mod tests {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
             events: vec![Event {
+                id: None,
                 summary: Some("Meeting".to_string()),
                 status: None,
                 organizer: None,
@@ -230,6 +232,7 @@ mod tests {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
             events: vec![Event {
+                id: None,
                 summary: None,
                 status: None,
                 organizer: Some(Organizer {
@@ -260,6 +263,7 @@ mod tests {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
             events: vec![Event {
+                id: None,
                 summary: None,
                 status: None,
                 organizer: None,

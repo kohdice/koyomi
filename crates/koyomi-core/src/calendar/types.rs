@@ -1,3 +1,4 @@
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +10,7 @@ pub struct CalendarEvents {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
+    pub id: Option<String>,
     pub summary: Option<String>,
     pub status: Option<EventStatus>,
     pub organizer: Option<Organizer>,
@@ -23,7 +25,7 @@ pub struct Event {
     pub html_link: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum EventDateTime {
     #[serde(rename_all = "camelCase")]
@@ -34,6 +36,33 @@ pub enum EventDateTime {
     Date {
         date: String,
     },
+}
+
+impl<'de> Deserialize<'de> for EventDateTime {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            date_time: Option<String>,
+            time_zone: Option<String>,
+            date: Option<String>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        if let Some(date_time) = raw.date_time {
+            Ok(EventDateTime::DateTime { date_time, time_zone: raw.time_zone })
+        } else if let Some(date) = raw.date {
+            Ok(EventDateTime::Date { date })
+        } else {
+            Err(serde::de::Error::custom(
+                "EventDateTime requires either 'dateTime' or 'date' field",
+            ))
+        }
+    }
 }
 
 impl EventDateTime {
@@ -401,5 +430,16 @@ mod tests {
         assert_eq!(reminders.overrides.len(), 2);
         assert_eq!(reminders.overrides[0].method, ReminderMethod::Email);
         assert_eq!(reminders.overrides[0].minutes, 1440);
+    }
+
+    #[test]
+    fn event_date_time_deserialize_neither_date_nor_datetime() {
+        let json = r#"{"timeZone": "Asia/Tokyo"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("dateTime"), "Error message should mention 'dateTime': {error}");
+        assert!(error.contains("date"), "Error message should mention 'date': {error}");
     }
 }
