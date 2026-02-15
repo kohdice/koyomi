@@ -30,7 +30,7 @@ pub enum Period {
     /// This week's events (next 7 days)
     #[value(alias = "w")]
     Week,
-    /// This month's events (next 30 days)
+    /// This month's events (next 1 calendar month)
     #[value(alias = "m")]
     Month,
 }

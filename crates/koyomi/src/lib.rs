@@ -23,6 +23,26 @@ fn init_tracing(verbose: u8) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {e}"))
 }
 
+/// Map an error to a process exit code.
+///
+/// Returns 2 for authentication-related errors (user must log in),
+/// and 1 for all other errors.
+#[must_use]
+pub fn exit_code_for(error: &anyhow::Error) -> i32 {
+    if let Some(e) = error.downcast_ref::<koyomi_core::Error>() {
+        match e {
+            koyomi_core::Error::TokenNotFound
+            | koyomi_core::Error::AuthAccessDenied
+            | koyomi_core::Error::AuthTimeout => return 2,
+            koyomi_core::Error::Calendar(koyomi_core::CalendarError::Unauthenticated) => {
+                return 2;
+            }
+            _ => {}
+        }
+    }
+    1
+}
+
 impl From<Period> for koyomi_core::calendar::EventPeriod {
     fn from(period: Period) -> Self {
         match period {
