@@ -28,7 +28,7 @@ impl StoredToken {
     ///
     /// This is useful for proactively refreshing tokens before they actually expire.
     /// A recommended buffer is 5 minutes.
-    pub fn is_expired_with_buffer(&self, buffer: chrono::Duration) -> bool {
+    pub fn is_expired_with_buffer(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
 }
@@ -141,7 +141,7 @@ pub fn delete() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::TimeDelta;
     use tempfile::TempDir;
 
     fn create_test_token() -> StoredToken {
@@ -154,7 +154,7 @@ mod tests {
                 "https://www.googleapis.com/auth/calendar.events".to_string(),
                 "openid".to_string(),
             ],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         }
     }
@@ -241,7 +241,7 @@ mod tests {
             refresh_token: None,
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
@@ -259,7 +259,7 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
@@ -274,8 +274,8 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         };
 
         assert!(token.is_expired());
@@ -289,12 +289,12 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::minutes(3),
+            expires_at: now + TimeDelta::minutes(3),
             obtained_at: now,
         };
 
         // Token expires in 3 minutes, so 5-minute buffer should consider it expired
-        assert!(token.is_expired_with_buffer(Duration::minutes(5)));
+        assert!(token.is_expired_with_buffer(TimeDelta::minutes(5)));
         // But without buffer, it's still valid
         assert!(!token.is_expired());
     }
@@ -307,11 +307,11 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
         // Token expires in 1 hour, so 5-minute buffer should not consider it expired
-        assert!(!token.is_expired_with_buffer(Duration::minutes(5)));
+        assert!(!token.is_expired_with_buffer(TimeDelta::minutes(5)));
     }
 }

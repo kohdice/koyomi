@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Local, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
@@ -137,15 +137,15 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 
     let (start, end) = match period {
         EventPeriod::Day => {
-            let end = today_start + Duration::days(1);
+            let end = today_start + TimeDelta::days(1);
             (today_start, end)
         }
         EventPeriod::Week => {
-            let end = today_start + Duration::days(7);
+            let end = today_start + TimeDelta::days(7);
             (today_start, end)
         }
         EventPeriod::Month => {
-            let end = today_start + Duration::days(30);
+            let end = today_start + TimeDelta::days(30);
             (today_start, end)
         }
     };

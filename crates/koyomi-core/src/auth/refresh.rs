@@ -78,7 +78,7 @@ pub async fn refresh_token(
     let now = Utc::now();
     let expires_in_secs = i64::try_from(refresh_response.expires_in)
         .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
-    let expires_at = now + chrono::Duration::seconds(expires_in_secs);
+    let expires_at = now + chrono::TimeDelta::seconds(expires_in_secs);
 
     Ok(StoredToken {
         access_token: refresh_response.access_token,
@@ -93,7 +93,7 @@ pub async fn refresh_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::TimeDelta;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -104,8 +104,8 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string(), "email".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         }
     }
 
@@ -149,8 +149,8 @@ mod tests {
             refresh_token: None,
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         };
 
         let result = refresh_token(&client, "client_id", "client_secret", &token, TOKEN_URL).await;

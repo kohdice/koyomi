@@ -58,7 +58,7 @@ pub async fn login() -> Result<()> {
     let now = Utc::now();
     let expires_in_secs = i64::try_from(token_response.expires_in)
         .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
-    let expires_at = now + chrono::Duration::seconds(expires_in_secs);
+    let expires_at = now + chrono::TimeDelta::seconds(expires_in_secs);
 
     let stored_token = token::StoredToken {
         access_token: token_response.access_token,
@@ -94,7 +94,7 @@ const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 pub async fn get_valid_token() -> Result<token::StoredToken> {
     let mut stored_token = token::load()?;
 
-    let buffer = chrono::Duration::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
+    let buffer = chrono::TimeDelta::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
     if stored_token.is_expired_with_buffer(buffer) {
         debug!("Token expired or expiring soon, refreshing");
 
