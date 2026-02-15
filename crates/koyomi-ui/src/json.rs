@@ -103,6 +103,7 @@ mod tests {
     fn sample_events() -> CalendarEvents {
         CalendarEvents {
             calendar: "Test Calendar".to_string(),
+            truncated: false,
             events: vec![Event {
                 id: None,
                 summary: Some("Meeting".to_string()),
@@ -176,7 +177,8 @@ mod tests {
 
     #[test]
     fn render_empty_events() {
-        let events = CalendarEvents { calendar: "Empty".to_string(), events: vec![] };
+        let events =
+            CalendarEvents { calendar: "Empty".to_string(), events: vec![], truncated: false };
         let mut buf = Vec::new();
         render(&mut buf, &events, false).unwrap();
 
@@ -189,6 +191,7 @@ mod tests {
     fn render_simplified_excludes_resource_attendees() {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
+            truncated: false,
             events: vec![Event {
                 id: None,
                 summary: Some("Meeting".to_string()),
@@ -231,6 +234,7 @@ mod tests {
     fn render_simplified_organizer_falls_back_to_email() {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
+            truncated: false,
             events: vec![Event {
                 id: None,
                 summary: None,
@@ -262,6 +266,7 @@ mod tests {
     fn render_simplified_conference_data_includes_video_url() {
         let events = CalendarEvents {
             calendar: "Test".to_string(),
+            truncated: false,
             events: vec![Event {
                 id: None,
                 summary: None,

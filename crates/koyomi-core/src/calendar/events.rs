@@ -138,23 +138,24 @@ pub(crate) async fn get_calendar_name(
     calendar_id: &str,
     base_url: &str,
 ) -> Result<String> {
-    let url = format!(
-        "{}/{}?fields={}",
-        base_url,
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(CALENDAR_INFO_FIELDS)
-    );
+    let url = reqwest::Url::parse_with_params(
+        &format!("{}/{}", base_url, urlencoding::encode(calendar_id)),
+        &[("fields", CALENDAR_INFO_FIELDS)],
+    )
+    .map_err(|e| CalendarError::BadRequest {
+        message: format!("Failed to construct calendar info URL: {e}"),
+    })?;
 
     debug!("Fetching calendar info: {}", url);
 
-    let response = client.get(&url, access_token).await?;
+    let response = client.get(url.as_str(), access_token).await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
+        let body = response.text().await.unwrap_or_else(|e| {
+            tracing::debug!("Failed to read error response body: {}", e);
+            format!("(failed to read response body: {e})")
+        });
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
@@ -164,7 +165,10 @@ pub(crate) async fn get_calendar_name(
             message: format!("Failed to parse calendar info response: {e}"),
         })?;
 
-    Ok(info.summary.unwrap_or_else(|| calendar_id.to_string()))
+    Ok(info.summary.unwrap_or_else(|| {
+        tracing::warn!("Calendar '{}' has no summary; using calendar ID as name", calendar_id);
+        calendar_id.to_string()
+    }))
 }
 
 /// Calculate time range based on period
@@ -192,7 +196,9 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
             (today_start, end)
         }
         EventPeriod::Month => {
-            let end = today_start + TimeDelta::days(30);
+            let end = today_start.checked_add_months(chrono::Months::new(1)).ok_or_else(|| {
+                CalendarError::InvalidTime("failed to add 1 calendar month".into())
+            })?;
             (today_start, end)
         }
     };
@@ -223,6 +229,7 @@ pub(crate) async fn list_events(
     let mut all_events: Vec<Event> = Vec::new();
     let mut page_token: Option<String> = None;
     let mut page_count: u32 = 0;
+    let mut truncated = false;
 
     loop {
         page_count += 1;
@@ -231,33 +238,39 @@ pub(crate) async fn list_events(
                 "Pagination exceeded {} pages; stopping to prevent infinite loop",
                 MAX_PAGES
             );
+            truncated = true;
             break;
         }
 
-        let mut url = format!(
-            "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&fields={}",
-            base_url,
-            urlencoding::encode(&config.calendar_id),
-            config.max_results,
-            urlencoding::encode(&time_min.to_rfc3339()),
-            urlencoding::encode(&time_max.to_rfc3339()),
-            urlencoding::encode(EVENTS_LIST_FIELDS),
-        );
-
+        let mut params: Vec<(&str, String)> = vec![
+            ("maxResults", config.max_results.to_string()),
+            ("timeMin", time_min.to_rfc3339()),
+            ("timeMax", time_max.to_rfc3339()),
+            ("singleEvents", "true".to_string()),
+            ("orderBy", "startTime".to_string()),
+            ("fields", EVENTS_LIST_FIELDS.to_string()),
+        ];
         if let Some(token) = &page_token {
-            url.push_str(&format!("&pageToken={}", urlencoding::encode(token)));
+            params.push(("pageToken", token.clone()));
         }
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/{}/events", base_url, urlencoding::encode(&config.calendar_id)),
+            &params,
+        )
+        .map_err(|e| CalendarError::BadRequest {
+            message: format!("Failed to construct events list URL: {e}"),
+        })?;
 
         debug!("Fetching events: {}", url);
 
-        let response = client.get(&url, access_token).await?;
+        let response = client.get(url.as_str(), access_token).await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::debug!("Failed to read error response body: {}", e);
+                format!("(failed to read response body: {e})")
+            });
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
@@ -284,7 +297,7 @@ pub(crate) async fn list_events(
 
     info!("Found {} events", all_events.len());
 
-    Ok(CalendarEvents { calendar: calendar_name, events: all_events })
+    Ok(CalendarEvents { calendar: calendar_name, events: all_events, truncated })
 }
 
 #[cfg(test)]
@@ -320,7 +333,8 @@ mod tests {
     fn calculate_time_range_month() {
         let (start, end) = calculate_time_range(EventPeriod::Month).unwrap();
         let diff = end - start;
-        assert_eq!(diff.num_days(), 30);
+        let days = diff.num_days();
+        assert!((28..=31).contains(&days), "Expected 28-31 days for a calendar month, got {days}");
     }
 
     #[tokio::test]
@@ -338,7 +352,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("test_token");
+        let token = AccessToken::new("test_token");
         let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
@@ -356,7 +370,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("test_token");
+        let token = AccessToken::new("test_token");
         let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
@@ -374,7 +388,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("test_token");
+        let token = AccessToken::new("test_token");
         let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
@@ -424,7 +438,8 @@ mod tests {
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
         let result =
-            list_events(&client, &AccessToken("test_token"), &config, &mock_server.uri()).await;
+            list_events(&client, &AccessToken::new("test_token"), &config, &mock_server.uri())
+                .await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -479,7 +494,8 @@ mod tests {
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
         let result =
-            list_events(&client, &AccessToken("test_token"), &config, &mock_server.uri()).await;
+            list_events(&client, &AccessToken::new("test_token"), &config, &mock_server.uri())
+                .await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -552,7 +568,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("invalid_token");
+        let token = AccessToken::new("invalid_token");
         let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
@@ -571,7 +587,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("test_token");
+        let token = AccessToken::new("test_token");
         let result =
             get_calendar_name(&client, &token, "private@example.com", &mock_server.uri()).await;
 
@@ -636,7 +652,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("token");
+        let token = AccessToken::new("token");
         let url = format!("{}/test", mock_server.uri());
         let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 200);
@@ -660,7 +676,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("token");
+        let token = AccessToken::new("token");
         let url = format!("{}/test", mock_server.uri());
         let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 200);
@@ -677,7 +693,7 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken("token");
+        let token = AccessToken::new("token");
         let url = format!("{}/test", mock_server.uri());
         let response = client.get(&url, &token).await.unwrap();
         assert_eq!(response.status(), 503);

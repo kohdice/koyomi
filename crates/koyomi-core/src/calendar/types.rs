@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct CalendarEvents {
     pub calendar: String,
     pub events: Vec<Event>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,7 +207,7 @@ pub enum EventPeriod {
     Day,
     /// This week (from today to 7 days later)
     Week,
-    /// This month (from today to 30 days later)
+    /// This month (from today to 1 calendar month later)
     Month,
 }
 
@@ -393,7 +395,11 @@ mod tests {
 
     #[test]
     fn calendar_events_serialize() {
-        let events = CalendarEvents { calendar: "Test Calendar".to_string(), events: vec![] };
+        let events = CalendarEvents {
+            calendar: "Test Calendar".to_string(),
+            events: vec![],
+            truncated: false,
+        };
 
         let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains("\"calendar\":\"Test Calendar\""));
