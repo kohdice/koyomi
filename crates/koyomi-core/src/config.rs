@@ -17,7 +17,10 @@ const CLIENT_SECRET_FILE: &str = "client_secret.json";
 /// (when `XDG_CONFIG_HOME` is not set).
 pub fn config_dir() -> Result<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg).join(CONFIG_DIR));
+        let path = PathBuf::from(&xdg);
+        if !xdg.is_empty() && path.is_absolute() {
+            return Ok(path.join(CONFIG_DIR));
+        }
     }
 
     let home = dirs::home_dir()
@@ -67,7 +70,7 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     Ok(secret)
 }
 
-/// Load client secret from `~/.config/koyomi/client_secret.json`
+/// Load client secret from the default config path
 ///
 /// # Errors
 ///

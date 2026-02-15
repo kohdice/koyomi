@@ -43,7 +43,8 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value = "day")]
         period: Period,
         /// Calendar ID (default: primary)
-        #[arg(short, long, default_value = "primary")]
+        #[arg(short, long, default_value = "primary",
+              value_parser = clap::builder::NonEmptyStringValueParser::new())]
         calendar: String,
         /// Show detailed event information
         #[arg(short, long)]
