@@ -39,7 +39,7 @@ pub enum Error {
     #[error("Authentication error: {0}")]
     Auth(String),
 
-    #[error("Token not found")]
+    #[error("Token not found. Please run 'koyomi login' to authenticate first.")]
     TokenNotFound,
 
     #[error("HTTP error: {0}")]
@@ -90,7 +90,10 @@ mod tests {
     #[test]
     fn token_not_found_error_displays_message() {
         let error = Error::TokenNotFound;
-        assert_eq!(error.to_string(), "Token not found");
+        assert_eq!(
+            error.to_string(),
+            "Token not found. Please run 'koyomi login' to authenticate first."
+        );
     }
 
     #[test]

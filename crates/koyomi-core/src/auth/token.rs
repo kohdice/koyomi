@@ -214,7 +214,7 @@ mod tests {
 
         let error = result.unwrap_err();
         assert!(matches!(error, Error::TokenNotFound));
-        assert_eq!(error.to_string(), "Token not found");
+        assert!(error.to_string().contains("Token not found"));
     }
 
     #[test]
