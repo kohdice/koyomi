@@ -8,8 +8,6 @@ use crate::{CalendarError, Result};
 /// Base URL for Google Calendar API
 pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
-const MAX_RESULTS: u32 = 250;
-
 /// Fields to request from Calendar info endpoint (Partial Response)
 ///
 /// <https://developers.google.com/calendar/api/guides/performance#partial-response>
@@ -28,11 +26,17 @@ const EVENTS_LIST_FIELDS: &str = "\
         start(date,dateTime,timeZone),\
         end(date,dateTime,timeZone),\
         description,\
-        attendees(email,displayName,responseStatus),\
+        attendees(email,displayName,responseStatus,resource),\
         reminders(useDefault,overrides(method,minutes)),\
         conferenceData(entryPoints(entryPointType,uri),conferenceSolution(name)),\
         htmlLink\
     )";
+
+/// Maximum value allowed for `max_results` (Google Calendar API limit)
+pub const MAX_RESULTS_LIMIT: u32 = 2500;
+
+/// Default value for `max_results` (matches Google Calendar API default)
+const DEFAULT_MAX_RESULTS: u32 = 250;
 
 /// Configuration for listing calendar events
 #[derive(Debug, Clone)]
@@ -41,11 +45,17 @@ pub struct ListEventsConfig {
     pub calendar_id: String,
     /// Time period to fetch events for
     pub period: EventPeriod,
+    /// Maximum number of events to return (1..=2500)
+    pub max_results: u32,
 }
 
 impl Default for ListEventsConfig {
     fn default() -> Self {
-        Self { calendar_id: "primary".to_string(), period: EventPeriod::default() }
+        Self {
+            calendar_id: "primary".to_string(),
+            period: EventPeriod::default(),
+            max_results: DEFAULT_MAX_RESULTS,
+        }
     }
 }
 
@@ -178,7 +188,7 @@ pub async fn list_events(
             "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&fields={}",
             events_base_url,
             urlencoding::encode(&config.calendar_id),
-            MAX_RESULTS,
+            config.max_results,
             urlencoding::encode(&time_min.to_rfc3339()),
             urlencoding::encode(&time_max.to_rfc3339()),
             EVENTS_LIST_FIELDS,
@@ -208,6 +218,11 @@ pub async fn list_events(
             all_events.extend(items);
         }
 
+        if all_events.len() >= config.max_results as usize {
+            all_events.truncate(config.max_results as usize);
+            break;
+        }
+
         match page.next_page_token {
             Some(token) => page_token = Some(token),
             None => break,
@@ -230,6 +245,7 @@ mod tests {
         let config = ListEventsConfig::default();
         assert_eq!(config.calendar_id, "primary");
         assert_eq!(config.period, EventPeriod::Day);
+        assert_eq!(config.max_results, 250);
     }
 
     #[test]
