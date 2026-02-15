@@ -23,21 +23,40 @@ fn init_tracing(verbose: u8) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {e}"))
 }
 
+/// Exit codes following sysexits.h conventions where applicable.
+///
+/// - 1: General error
+/// - 69 (EX_UNAVAILABLE): Service unavailable (HTTP errors, rate limiting)
+/// - 77 (EX_NOPERM): Authentication required / access denied
+/// - 78 (EX_CONFIG): Configuration error
+const EX_NOPERM: u8 = 77;
+const EX_CONFIG: u8 = 78;
+
 /// Map an error to a process exit code.
 ///
-/// Returns 2 for authentication-related errors (user must log in),
-/// and 1 for all other errors.
+/// Uses sysexits.h conventions:
+/// - `EX_NOPERM` (77) for authentication-related errors
+/// - `EX_CONFIG` (78) for configuration errors
+/// - 1 for all other errors
 #[must_use]
-pub fn exit_code_for(error: &anyhow::Error) -> i32 {
+pub fn exit_code_for(error: &anyhow::Error) -> u8 {
     if let Some(e) = error.downcast_ref::<koyomi_core::Error>() {
         match e {
             koyomi_core::Error::TokenNotFound
             | koyomi_core::Error::AuthAccessDenied
-            | koyomi_core::Error::AuthTimeout => return 2,
+            | koyomi_core::Error::AuthTimeout
+            | koyomi_core::Error::NoRefreshToken => return EX_NOPERM,
             koyomi_core::Error::Calendar(koyomi_core::CalendarError::Unauthenticated) => {
-                return 2;
+                return EX_NOPERM;
             }
-            _ => {}
+            koyomi_core::Error::ConfigDirNotFound
+            | koyomi_core::Error::ConfigFileNotFound { .. }
+            | koyomi_core::Error::ConfigInvalid(_) => return EX_CONFIG,
+            koyomi_core::Error::Auth(_)
+            | koyomi_core::Error::Http(_)
+            | koyomi_core::Error::Json(_)
+            | koyomi_core::Error::Io(_)
+            | koyomi_core::Error::Calendar(_) => return 1,
         }
     }
     1
@@ -62,12 +81,17 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
 
-    let client = koyomi_core::Client::new()?;
-
     match cli.command {
-        Commands::Login => handle_login(&client, cli.quiet).await,
-        Commands::Logout => handle_logout(cli.quiet),
+        Commands::Login => {
+            let client = koyomi_core::Client::new()?;
+            handle_login(&client, cli.quiet).await
+        }
+        Commands::Logout => {
+            let client = koyomi_core::Client::new()?;
+            handle_logout(&client, cli.quiet).await
+        }
         Commands::Events { period, calendar, details, limit } => {
+            let client = koyomi_core::Client::new()?;
             handle_events(&client, period, calendar, details, limit).await
         }
     }
@@ -103,8 +127,8 @@ async fn handle_login(client: &koyomi_core::Client, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_logout(quiet: bool) -> Result<()> {
-    match koyomi_core::logout()? {
+async fn handle_logout(client: &koyomi_core::Client, quiet: bool) -> Result<()> {
+    match koyomi_core::logout(client).await? {
         koyomi_core::LogoutResult::LoggedOut => {
             if !quiet {
                 eprintln!("Successfully logged out.");

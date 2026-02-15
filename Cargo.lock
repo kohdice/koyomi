@@ -889,6 +889,7 @@ dependencies = [
  "clap",
  "koyomi-core",
  "koyomi-ui",
+ "libc",
  "open",
  "tokio",
  "tracing",

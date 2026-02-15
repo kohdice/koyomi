@@ -1,8 +1,19 @@
+use std::process::ExitCode;
+
 #[tokio::main]
-async fn main() {
-    if let Err(e) = koyomi::run().await {
-        let code = koyomi::exit_code_for(&e);
-        eprintln!("koyomi: {e:#}");
-        std::process::exit(code);
+async fn main() -> ExitCode {
+    // Reset SIGPIPE to default behavior so piping to `head` etc. exits cleanly
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
+    match koyomi::run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            let code = koyomi::exit_code_for(&e);
+            eprintln!("koyomi: {e:#}");
+            ExitCode::from(code)
+        }
     }
 }
