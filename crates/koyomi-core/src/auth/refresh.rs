@@ -19,6 +19,7 @@ struct RefreshRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct RefreshResponse {
     access_token: String,
+    refresh_token: Option<String>,
     token_type: String,
     expires_in: u64,
     scope: String,
@@ -90,7 +91,7 @@ pub async fn refresh_token(
 
     StoredToken::from_response(
         refresh_response.access_token,
-        token.refresh_token().map(String::from),
+        refresh_response.refresh_token.or_else(|| token.refresh_token().map(String::from)),
         refresh_response.token_type,
         &refresh_response.scope,
         refresh_response.expires_in,
