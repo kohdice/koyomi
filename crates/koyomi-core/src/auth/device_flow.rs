@@ -2,52 +2,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
-pub const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
-pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-pub const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
+pub(super) const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
+pub(super) const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// POST /device/code request body
 #[derive(Serialize)]
-pub struct DeviceCodeRequest<'a> {
-    pub client_id: &'a str,
-    pub scope: &'a str,
+struct DeviceCodeRequest<'a> {
+    client_id: &'a str,
+    scope: &'a str,
 }
 
 /// POST /device/code response
 #[derive(Debug, Deserialize)]
-pub struct DeviceCodeResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_url: String,
-    pub expires_in: u64,
-    pub interval: u64,
+pub(super) struct DeviceCodeResponse {
+    pub(super) device_code: String,
+    pub(super) user_code: String,
+    pub(super) verification_url: String,
+    pub(super) expires_in: u64,
+    pub(super) interval: u64,
 }
 
 /// POST /token request body
 #[derive(Serialize)]
-pub struct TokenRequest<'a> {
-    pub client_id: &'a str,
-    pub client_secret: &'a str,
-    pub device_code: &'a str,
-    pub grant_type: &'a str,
+struct TokenRequest<'a> {
+    client_id: &'a str,
+    client_secret: &'a str,
+    device_code: &'a str,
+    grant_type: &'a str,
 }
 
 /// POST /token success response
 #[derive(Debug, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub token_type: String,
-    pub expires_in: u64,
-    pub scope: String,
+pub(super) struct TokenResponse {
+    pub(super) access_token: String,
+    pub(super) refresh_token: Option<String>,
+    pub(super) token_type: String,
+    pub(super) expires_in: u64,
+    pub(super) scope: String,
 }
 
 /// POST /token error response
 #[derive(Debug, Deserialize)]
-pub struct TokenErrorResponse {
-    pub error: String,
-    pub error_description: Option<String>,
+struct TokenErrorResponse {
+    error: String,
+    error_description: Option<String>,
 }
 
 /// Start the device authorization flow
@@ -59,7 +59,7 @@ pub struct TokenErrorResponse {
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn start(
+pub(super) async fn start(
     client: &reqwest::Client,
     client_id: &str,
     device_code_url: &str,
@@ -92,10 +92,10 @@ pub async fn start(
 }
 
 #[derive(Debug, Clone)]
-pub struct PollConfig {
-    pub token_url: String,
-    pub initial_interval: u64,
-    pub expires_in: u64,
+pub(super) struct PollConfig {
+    pub(super) token_url: String,
+    pub(super) initial_interval: u64,
+    pub(super) expires_in: u64,
 }
 
 impl Default for PollConfig {
@@ -113,7 +113,7 @@ impl Default for PollConfig {
 /// - The user denies access
 /// - The device code expires
 /// - The HTTP request fails
-pub async fn poll(
+pub(super) async fn poll(
     client: &reqwest::Client,
     client_id: &str,
     client_secret: &str,
@@ -129,7 +129,7 @@ pub async fn poll(
 
     loop {
         if start_time.elapsed() >= timeout {
-            return Err(Error::Auth("Authorization timed out. Please try again.".into()));
+            return Err(Error::AuthTimeout);
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
@@ -152,7 +152,7 @@ pub async fn poll(
                         continue;
                     }
                     "access_denied" => {
-                        return Err(Error::Auth("Access denied by user.".into()));
+                        return Err(Error::AuthAccessDenied);
                     }
                     "expired_token" => {
                         return Err(Error::Auth(

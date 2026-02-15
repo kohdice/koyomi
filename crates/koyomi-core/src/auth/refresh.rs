@@ -46,9 +46,7 @@ pub async fn refresh_token(
     token: &StoredToken,
     token_url: &str,
 ) -> Result<StoredToken> {
-    let refresh_token = token.refresh_token.as_ref().ok_or_else(|| {
-        Error::Auth("Cannot refresh token: no refresh token available".to_string())
-    })?;
+    let refresh_token = token.refresh_token().ok_or(Error::NoRefreshToken)?;
 
     debug!("Refreshing access token");
 
@@ -92,7 +90,7 @@ pub async fn refresh_token(
 
     StoredToken::from_response(
         refresh_response.access_token,
-        token.refresh_token.clone(),
+        token.refresh_token().map(String::from),
         refresh_response.token_type,
         &refresh_response.scope,
         refresh_response.expires_in,
@@ -166,6 +164,7 @@ mod tests {
 
         assert!(result.is_err());
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::NoRefreshToken));
         assert!(error.to_string().contains("no refresh token available"));
     }
 
