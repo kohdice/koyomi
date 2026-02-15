@@ -175,17 +175,45 @@ pub async fn get_valid_token(client: &crate::client::Client) -> Result<token::St
     Ok(stored_token)
 }
 
-/// Remove stored tokens.
+const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
+
+/// Remove stored tokens and revoke them with Google.
+///
+/// Attempts to revoke the token with Google's revocation endpoint before
+/// deleting the local token file. If revocation fails (e.g. network error),
+/// the local token is still deleted with a warning.
 ///
 /// Returns a [`LogoutResult`] indicating what happened.
 ///
 /// # Errors
 ///
 /// Returns an error if the token file exists but cannot be deleted.
-pub fn logout() -> Result<LogoutResult> {
+pub async fn logout(client: &crate::client::Client) -> Result<LogoutResult> {
     let token_path = token::path()?;
     match token::load(&token_path) {
-        Ok(_) => {
+        Ok(stored_token) => {
+            if let Some(refresh_token) = stored_token.refresh_token() {
+                match client.http().post(REVOKE_URL).form(&[("token", refresh_token)]).send().await
+                {
+                    Ok(response) if response.status().is_success() => {
+                        debug!("Token revoked successfully with Google");
+                    }
+                    Ok(response) => {
+                        warn!(
+                            "Token revocation returned HTTP {}: token may still be valid on Google's side",
+                            response.status()
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to revoke token with Google (network error: {}): \
+                             token may still be valid on Google's side",
+                            e
+                        );
+                    }
+                }
+            }
+
             token::delete(&token_path)?;
             info!("Token file has been removed");
             Ok(LogoutResult::LoggedOut)
