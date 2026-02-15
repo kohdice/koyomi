@@ -42,7 +42,7 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
 
-    let client = koyomi_core::Client::new();
+    let client = koyomi_core::Client::new()?;
 
     match cli.command {
         Some(Commands::Login) => {

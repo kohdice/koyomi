@@ -15,13 +15,17 @@ pub struct Client {
 }
 
 impl Client {
-    #[must_use]
-    pub fn new() -> Self {
+    /// Creates a new client with default timeout settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be initialized
+    /// (e.g., TLS backend failure).
+    pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .expect("Failed to build HTTP client");
-        Self { http }
+            .build()?;
+        Ok(Self { http })
     }
 
     /// Returns a reference to the internal HTTP client.
@@ -50,11 +54,5 @@ impl Client {
             calendar::CALENDAR_API_BASE_URL,
         )
         .await
-    }
-}
-
-impl Default for Client {
-    fn default() -> Self {
-        Self::new()
     }
 }
