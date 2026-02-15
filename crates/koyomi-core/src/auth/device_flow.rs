@@ -100,9 +100,7 @@ pub(super) struct PollConfig {
 
 impl PollConfig {
     pub(super) fn new(token_url: String, initial_interval: u64, expires_in: u64) -> Self {
-        debug_assert!(initial_interval > 0, "initial_interval must be > 0");
-        debug_assert!(expires_in > 0, "expires_in must be > 0");
-        Self { token_url, initial_interval, expires_in }
+        Self { token_url, initial_interval: initial_interval.max(1), expires_in: expires_in.max(1) }
     }
 
     pub(super) fn token_url(&self) -> &str {
@@ -141,8 +139,10 @@ pub(super) async fn poll(
     config: &PollConfig,
 ) -> Result<TokenResponse> {
     // Use std::time::Instant for real wall-clock timeout measurement.
-    // tokio::time::Instant would be auto-advanced by internal timers in
-    // reqwest/hyper when tokio::time::pause() is active, causing spurious timeouts.
+    // tokio::time::Instant is affected by tokio::time::pause() in tests,
+    // where it only advances when explicitly driven — meaning the timeout
+    // would never fire in test mode. Using std::time::Instant ensures the
+    // timeout works correctly regardless of the tokio time mode.
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(config.expires_in());
     let mut interval = config.initial_interval();
