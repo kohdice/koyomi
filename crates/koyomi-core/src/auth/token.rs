@@ -1,9 +1,8 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 use crate::{Error, Result, config};
 
@@ -58,17 +57,19 @@ impl StoredToken {
         })
     }
 
-    pub fn is_expired(&self) -> bool {
-        Utc::now() >= self.expires_at
-    }
-
-    /// Check if the token has expired or will expire within the given buffer duration
-    ///
-    /// This is useful for proactively refreshing tokens before they actually expire.
-    /// A recommended buffer is 5 minutes.
-    pub fn is_expired_with_buffer(&self, buffer: chrono::TimeDelta) -> bool {
+    #[must_use]
+    pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
+}
+
+/// Returns the default token file path (`~/.config/koyomi/google_tokens.json`).
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined.
+pub fn path() -> Result<PathBuf> {
+    Ok(config::config_dir()?.join(TOKEN_FILE))
 }
 
 /// Save token to the specified path
@@ -79,7 +80,7 @@ impl StoredToken {
 /// - The parent directory cannot be created
 /// - The file cannot be written
 /// - File permissions cannot be set (Unix only)
-pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
+pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         #[cfg(unix)]
         {
@@ -103,6 +104,7 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
         let mut file =
             OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
         file.write_all(content.as_bytes())?;
+        file.sync_all()?;
     }
 
     #[cfg(not(unix))]
@@ -121,7 +123,7 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 /// - The file does not exist ([`Error::TokenNotFound`])
 /// - The file cannot be read
 /// - The JSON format is invalid
-pub fn load_from_path(path: &Path) -> Result<StoredToken> {
+pub fn load(path: &Path) -> Result<StoredToken> {
     let content = fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound { Error::TokenNotFound } else { Error::Io(e) }
     })?;
@@ -141,56 +143,12 @@ pub fn load_from_path(path: &Path) -> Result<StoredToken> {
 /// # Errors
 ///
 /// Returns an error if the file exists but cannot be removed.
-pub fn delete_path(path: &Path) -> Result<()> {
+pub fn delete(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
-}
-
-fn token_path() -> Result<std::path::PathBuf> {
-    Ok(config::config_dir()?.join(TOKEN_FILE))
-}
-
-/// Save token to the default token file path
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The parent directory cannot be created
-/// - The file cannot be written
-/// - File permissions cannot be set (Unix only)
-pub fn save(token: &StoredToken) -> Result<()> {
-    let path = token_path()?;
-    save_to_path(token, &path)?;
-    info!("Token saved to {}", path.display());
-    Ok(())
-}
-
-/// Load token from the default token file path
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The file does not exist ([`Error::TokenNotFound`])
-/// - The file cannot be read
-/// - The JSON format is invalid
-pub fn load() -> Result<StoredToken> {
-    load_from_path(&token_path()?)
-}
-
-/// Delete the default token file
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The file exists but cannot be removed
-pub fn delete() -> Result<()> {
-    delete_path(&token_path()?)
 }
 
 #[cfg(test)]
@@ -220,10 +178,10 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        let result = save_to_path(&token, &path);
+        let result = save(&token, &path);
         assert!(result.is_ok());
 
-        let loaded = load_from_path(&path);
+        let loaded = load(&path);
         assert!(loaded.is_ok());
 
         let loaded_token = loaded.unwrap();
@@ -239,10 +197,10 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        save_to_path(&token, &path).unwrap();
+        save(&token, &path).unwrap();
         assert!(path.exists());
 
-        let result = delete_path(&path);
+        let result = delete(&path);
         assert!(result.is_ok());
         assert!(!path.exists());
     }
@@ -252,7 +210,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
-        let result = delete_path(&path);
+        let result = delete(&path);
         assert!(result.is_ok());
     }
 
@@ -261,7 +219,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
-        let result = load_from_path(&path);
+        let result = load(&path);
         assert!(result.is_err());
 
         let error = result.unwrap_err();
@@ -278,7 +236,7 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        save_to_path(&token, &path).unwrap();
+        save(&token, &path).unwrap();
 
         let metadata = fs::metadata(&path).unwrap();
         let mode = metadata.permissions().mode();
@@ -300,8 +258,8 @@ mod tests {
             obtained_at: now,
         };
 
-        save_to_path(&token, &path).unwrap();
-        let loaded = load_from_path(&path).unwrap();
+        save(&token, &path).unwrap();
+        let loaded = load(&path).unwrap();
 
         assert!(loaded.refresh_token.is_none());
     }
@@ -318,7 +276,7 @@ mod tests {
             obtained_at: now,
         };
 
-        assert!(!token.is_expired());
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -333,7 +291,7 @@ mod tests {
             obtained_at: now - TimeDelta::hours(2),
         };
 
-        assert!(token.is_expired());
+        assert!(token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -349,9 +307,9 @@ mod tests {
         };
 
         // Token expires in 3 minutes, so 5-minute buffer should consider it expired
-        assert!(token.is_expired_with_buffer(TimeDelta::minutes(5)));
+        assert!(token.is_expired(TimeDelta::minutes(5)));
         // But without buffer, it's still valid
-        assert!(!token.is_expired());
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -367,7 +325,7 @@ mod tests {
         };
 
         // Token expires in 1 hour, so 5-minute buffer should not consider it expired
-        assert!(!token.is_expired_with_buffer(TimeDelta::minutes(5)));
+        assert!(!token.is_expired(TimeDelta::minutes(5)));
     }
 
     #[test]

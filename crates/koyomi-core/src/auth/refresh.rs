@@ -70,6 +70,13 @@ pub async fn refresh_token(
             .await
             .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
         let message = match serde_json::from_str::<RefreshErrorResponse>(&body) {
+            Ok(error) if error.error == "invalid_grant" => {
+                let desc = error.error_description.as_deref().unwrap_or("token expired or revoked");
+                format!(
+                    "Failed to refresh token: {} - {}. Please run 'koyomi logout' then 'koyomi login'.",
+                    error.error, desc
+                )
+            }
             Ok(error) => match error.error_description {
                 Some(desc) => format!("Failed to refresh token: {} - {}", error.error, desc),
                 None => format!("Failed to refresh token: {}", error.error),
@@ -137,7 +144,7 @@ mod tests {
         assert_eq!(new_token.access_token, "new_access_token");
         assert_eq!(new_token.refresh_token, Some("test_refresh_token".to_string()));
         assert_eq!(new_token.token_type, "Bearer");
-        assert!(!new_token.is_expired());
+        assert!(!new_token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[tokio::test]

@@ -67,7 +67,8 @@ pub async fn login(http: &reqwest::Client) -> Result<()> {
         token_response.expires_in,
     )?;
 
-    token::save(&stored_token)?;
+    let token_path = token::path()?;
+    token::save(&stored_token, &token_path)?;
 
     eprintln!();
     eprintln!("Successfully logged in!");
@@ -90,10 +91,11 @@ const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 /// - Token refresh fails
 /// - The new token cannot be saved
 pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToken> {
-    let mut stored_token = token::load()?;
+    let token_path = token::path()?;
+    let mut stored_token = token::load(&token_path)?;
 
     let buffer = chrono::TimeDelta::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
-    if stored_token.is_expired_with_buffer(buffer) {
+    if stored_token.is_expired(buffer) {
         debug!("Token expired or expiring soon, refreshing");
 
         let secret = config::load()?;
@@ -107,7 +109,7 @@ pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToke
         )
         .await?;
 
-        token::save(&new_token)?;
+        token::save(&new_token, &token_path)?;
         info!("Token refreshed and saved");
 
         stored_token = new_token;
@@ -122,9 +124,10 @@ pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToke
 ///
 /// Returns an error if the token file exists but cannot be deleted.
 pub fn logout() -> Result<()> {
-    match token::load() {
+    let token_path = token::path()?;
+    match token::load(&token_path) {
         Ok(_) => {
-            token::delete()?;
+            token::delete(&token_path)?;
             info!("Token file has been removed");
             eprintln!("Successfully logged out.");
         }
@@ -133,7 +136,7 @@ pub fn logout() -> Result<()> {
         }
         Err(e) => {
             warn!("Token file is corrupt or unreadable: {}", e);
-            token::delete()?;
+            token::delete(&token_path)?;
             info!("Corrupt token file has been removed");
             eprintln!(
                 "Token file was corrupt and has been removed. Please run 'koyomi login' again."
@@ -154,7 +157,7 @@ mod tests {
 
     #[test]
     fn token_module_is_accessible() {
-        let _: fn() -> Result<token::StoredToken> = token::load;
+        let _: fn(&std::path::Path) -> Result<token::StoredToken> = token::load;
     }
 
     #[test]
