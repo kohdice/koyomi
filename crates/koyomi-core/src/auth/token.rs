@@ -8,38 +8,53 @@ use crate::{Error, Result, config};
 
 /// RAII guard for advisory file lock using `flock(2)`.
 ///
-/// Acquires an exclusive lock on construction and releases it on drop.
+/// Acquires an exclusive non-blocking lock on construction and releases it on drop.
+/// The underlying file descriptor is managed by `std::fs::File`, ensuring
+/// automatic close on drop without manual `libc::close`.
 #[cfg(unix)]
 pub(crate) struct FileLock {
-    fd: std::os::unix::io::RawFd,
+    file: std::fs::File,
 }
 
 #[cfg(unix)]
 impl FileLock {
-    /// Acquire an exclusive lock on the given path, creating the file if needed.
+    /// Acquire an exclusive non-blocking lock on the given path, creating the file if needed.
+    ///
+    /// Uses `LOCK_NB` to avoid blocking indefinitely if another process holds the lock.
     pub(crate) fn acquire(path: &Path) -> Result<Self> {
-        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
 
-        let file = fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)?;
-        let fd = file.into_raw_fd();
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
 
-        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if ret != 0 {
             let err = std::io::Error::last_os_error();
-            unsafe { libc::close(fd) };
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                return Err(crate::Error::Auth(
+                    "Token file is locked by another process. Please wait and try again.".into(),
+                ));
+            }
             return Err(err.into());
         }
 
-        Ok(Self { fd })
+        Ok(Self { file })
     }
 }
 
 #[cfg(unix)]
 impl Drop for FileLock {
     fn drop(&mut self) {
-        unsafe {
-            libc::flock(self.fd, libc::LOCK_UN);
-            libc::close(self.fd);
+        use std::os::unix::io::AsRawFd;
+        let ret = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!("Failed to release file lock: {}", err);
         }
     }
 }
@@ -85,14 +100,16 @@ impl StoredToken {
         let now = Utc::now();
         let expires_in_secs = i64::try_from(expires_in)
             .map_err(|_| crate::Error::Auth("Token expiration time overflow".into()))?;
-        Ok(Self {
+        let token = Self {
             access_token,
             refresh_token,
             token_type,
             scope: scope_str.split_whitespace().map(String::from).collect(),
             expires_at: now + chrono::TimeDelta::seconds(expires_in_secs),
             obtained_at: now,
-        })
+        };
+        token.validate()?;
+        Ok(token)
     }
 
     #[must_use]
@@ -124,13 +141,16 @@ impl StoredToken {
     }
 }
 
-/// Returns the default token file path (`~/.config/koyomi/google_tokens.json`).
+/// Returns the default token file path.
+///
+/// Uses `XDG_DATA_HOME` (or platform data directory) for token storage,
+/// as tokens are persistent application state, not user-editable configuration.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
+/// Returns an error if the data directory cannot be determined.
 pub fn path() -> Result<PathBuf> {
-    Ok(config::config_dir()?.join(TOKEN_FILE))
+    Ok(config::data_dir()?.join(TOKEN_FILE))
 }
 
 /// Save token to the specified path atomically.
@@ -181,7 +201,9 @@ pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
         fs::write(&tmp_path, &content)?;
     }
 
-    fs::rename(&tmp_path, path)?;
+    fs::rename(&tmp_path, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp_path);
+    })?;
 
     Ok(())
 }
