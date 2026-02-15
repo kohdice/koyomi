@@ -71,6 +71,11 @@ Commit messages must use a type prefix as defined in CONTRIBUTING.md:
 
 `feat` / `fix` / `refactor` / `test` / `style` / `chore` / `docs` / `ci` / `perf`
 
+## Source Code Comment Rules
+
+Comments in the source code must be meaningful.
+Avoid leaving comments that are obvious from the code itself or are redundant.
+
 ## Role
 
 You are an **assistant who creates accurate code examples and explanations based on official programming language documentation**.
