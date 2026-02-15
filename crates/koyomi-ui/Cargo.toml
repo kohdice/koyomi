@@ -2,7 +2,7 @@
 name = "koyomi-ui"
 version.workspace = true
 authors.workspace = true
-description.workspace = true
+description = "Rendering for koyomi calendar events"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

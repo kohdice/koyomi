@@ -26,6 +26,8 @@ pub fn render<W: Write>(writer: &mut W, events: &CalendarEvents, details: bool) 
 struct SimplifiedResponse {
     calendar: String,
     events: Vec<SimplifiedEvent>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -54,6 +56,7 @@ impl From<&CalendarEvents> for SimplifiedResponse {
         Self {
             calendar: events.calendar.clone(),
             events: events.events.iter().map(SimplifiedEvent::from).collect(),
+            truncated: events.truncated,
         }
     }
 }
