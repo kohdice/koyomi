@@ -58,10 +58,10 @@ impl ListEventsConfig {
     /// - `max_results` is outside the range `1..=2500`
     pub fn new(calendar_id: String, period: EventPeriod, max_results: u32) -> crate::Result<Self> {
         if calendar_id.is_empty() {
-            return Err(crate::Error::Config("calendar_id must not be empty".into()));
+            return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
         }
         if max_results == 0 || max_results > MAX_RESULTS_LIMIT {
-            return Err(crate::Error::Config(format!(
+            return Err(crate::Error::ConfigInvalid(format!(
                 "max_results must be between 1 and {MAX_RESULTS_LIMIT}"
             )));
         }

@@ -15,7 +15,7 @@ const CLIENT_SECRET_FILE: &str = "client_secret.json";
 ///
 /// Returns an error if the home directory cannot be determined
 /// (when `XDG_CONFIG_HOME` is not set).
-pub fn config_dir() -> Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         let path = PathBuf::from(&xdg);
         if !xdg.is_empty() && path.is_absolute() {
@@ -29,21 +29,20 @@ pub fn config_dir() -> Result<PathBuf> {
         }
     }
 
-    let home = dirs::home_dir()
-        .ok_or_else(|| Error::Config("Could not determine home directory".into()))?;
+    let home = dirs::home_dir().ok_or(Error::ConfigDirNotFound)?;
 
     Ok(home.join(".config").join(CONFIG_DIR))
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ClientSecretFile {
-    pub installed: ClientSecretInstalled,
+pub(crate) struct ClientSecretFile {
+    pub(crate) installed: ClientSecretInstalled,
 }
 
 #[derive(Deserialize)]
-pub struct ClientSecretInstalled {
-    pub client_id: String,
-    pub client_secret: String,
+pub(crate) struct ClientSecretInstalled {
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
 }
 
 impl std::fmt::Debug for ClientSecretInstalled {
@@ -63,7 +62,7 @@ impl std::fmt::Debug for ClientSecretInstalled {
 /// - The file cannot be read
 /// - The JSON format is invalid
 /// - `client_id` or `client_secret` is missing or empty
-pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
+pub(crate) fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -76,33 +75,26 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
                     mode,
                     path.display()
                 );
-                eprintln!(
-                    "Warning: {} has overly permissive file permissions ({:o}). \
-                     Recommended: chmod 600 {}",
-                    path.display(),
-                    mode,
-                    path.display()
-                );
             }
         }
     }
 
     let content = std::fs::read_to_string(path).map_err(|e| {
-        Error::Config(format!(
-            "Failed to read {}: {}. Please create this file with your OAuth2 credentials.",
-            path.display(),
-            e
-        ))
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::ConfigFileNotFound { path: path.to_path_buf() }
+        } else {
+            Error::Io(e)
+        }
     })?;
 
     let secret: ClientSecretFile = serde_json::from_str(&content)
-        .map_err(|e| Error::Config(format!("Invalid {CLIENT_SECRET_FILE} format: {e}")))?;
+        .map_err(|e| Error::ConfigInvalid(format!("Invalid {CLIENT_SECRET_FILE} format: {e}")))?;
 
     if secret.installed.client_id.is_empty() {
-        return Err(Error::Config("client_id is missing or empty".into()));
+        return Err(Error::ConfigInvalid("client_id is missing or empty".into()));
     }
     if secret.installed.client_secret.is_empty() {
-        return Err(Error::Config("client_secret is missing or empty".into()));
+        return Err(Error::ConfigInvalid("client_secret is missing or empty".into()));
     }
 
     Ok(secret)
@@ -117,7 +109,7 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
 /// - The file cannot be read
 /// - The JSON format is invalid
 /// - `client_id` or `client_secret` is missing or empty
-pub fn load() -> Result<ClientSecretFile> {
+pub(crate) fn load() -> Result<ClientSecretFile> {
     let path = config_dir()?.join(CLIENT_SECRET_FILE);
     load_from_path(&path)
 }
@@ -162,6 +154,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("Invalid client_secret.json format"));
     }
 
@@ -180,6 +173,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("client_id is missing or empty"));
     }
 
@@ -198,6 +192,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("client_secret is missing or empty"));
     }
 
@@ -209,7 +204,8 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("Failed to read"));
+        assert!(matches!(error, Error::ConfigFileNotFound { .. }));
+        assert!(error.to_string().contains("Config file not found"));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -37,8 +39,23 @@ pub enum CalendarError {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Configuration error: {0}")]
-    Config(String),
+    #[error("Could not determine config directory")]
+    ConfigDirNotFound,
+
+    #[error("Config file not found: {path}. Please create this file with your OAuth2 credentials.")]
+    ConfigFileNotFound { path: PathBuf },
+
+    #[error("Invalid config format: {0}")]
+    ConfigInvalid(String),
+
+    #[error("Cannot refresh token: no refresh token available")]
+    NoRefreshToken,
+
+    #[error("Authorization timed out. Please try again.")]
+    AuthTimeout,
+
+    #[error("Access denied by user.")]
+    AuthAccessDenied,
 
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -66,9 +83,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_error_displays_message() {
-        let error = Error::Config("test config error".to_string());
-        assert_eq!(error.to_string(), "Configuration error: test config error");
+    fn config_dir_not_found_displays_message() {
+        let error = Error::ConfigDirNotFound;
+        assert_eq!(error.to_string(), "Could not determine config directory");
+    }
+
+    #[test]
+    fn config_file_not_found_displays_message() {
+        let error =
+            Error::ConfigFileNotFound { path: PathBuf::from("/path/to/client_secret.json") };
+        assert!(error.to_string().contains("Config file not found"));
+        assert!(error.to_string().contains("/path/to/client_secret.json"));
+    }
+
+    #[test]
+    fn config_invalid_displays_message() {
+        let error = Error::ConfigInvalid("bad format".to_string());
+        assert_eq!(error.to_string(), "Invalid config format: bad format");
+    }
+
+    #[test]
+    fn no_refresh_token_displays_message() {
+        let error = Error::NoRefreshToken;
+        assert!(error.to_string().contains("no refresh token available"));
+    }
+
+    #[test]
+    fn auth_timeout_displays_message() {
+        let error = Error::AuthTimeout;
+        assert!(error.to_string().contains("Authorization timed out"));
+    }
+
+    #[test]
+    fn auth_access_denied_displays_message() {
+        let error = Error::AuthAccessDenied;
+        assert!(error.to_string().contains("Access denied by user"));
     }
 
     #[test]
@@ -105,7 +154,6 @@ mod tests {
         let auth_error = Error::Auth("some auth error".to_string());
         let token_not_found = Error::TokenNotFound;
 
-        // These should be different error types
         assert!(matches!(auth_error, Error::Auth(_)));
         assert!(matches!(token_not_found, Error::TokenNotFound));
         assert!(!matches!(token_not_found, Error::Auth(_)));
