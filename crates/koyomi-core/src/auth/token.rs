@@ -6,59 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result, config};
 
-/// RAII guard for advisory file lock using `flock(2)`.
-///
-/// Acquires an exclusive non-blocking lock on construction and releases it on drop.
-/// The underlying file descriptor is managed by `std::fs::File`, ensuring
-/// automatic close on drop without manual `libc::close`.
-#[cfg(unix)]
-pub(crate) struct FileLock {
-    file: std::fs::File,
-}
-
-#[cfg(unix)]
-impl FileLock {
-    /// Acquire an exclusive non-blocking lock on the given path, creating the file if needed.
-    ///
-    /// Uses `LOCK_NB` to avoid blocking indefinitely if another process holds the lock.
-    pub(crate) fn acquire(path: &Path) -> Result<Self> {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)?;
-
-        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if ret != 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::WouldBlock {
-                return Err(crate::Error::Auth(
-                    "Token file is locked by another process. Please wait and try again.".into(),
-                ));
-            }
-            return Err(err.into());
-        }
-
-        Ok(Self { file })
-    }
-}
-
-#[cfg(unix)]
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd;
-        let ret = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
-        if ret != 0 {
-            let err = std::io::Error::last_os_error();
-            tracing::warn!("Failed to release file lock: {}", err);
-        }
-    }
-}
-
 const TOKEN_FILE: &str = "google_tokens.json";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,16 +47,14 @@ impl StoredToken {
         let now = Utc::now();
         let expires_in_secs = i64::try_from(expires_in)
             .map_err(|_| crate::Error::Auth("Token expiration time overflow".into()))?;
-        let token = Self {
+        Ok(Self {
             access_token,
             refresh_token,
             token_type,
             scope: scope_str.split_whitespace().map(String::from).collect(),
             expires_at: now + chrono::TimeDelta::seconds(expires_in_secs),
             obtained_at: now,
-        };
-        token.validate()?;
-        Ok(token)
+        })
     }
 
     #[must_use]
@@ -126,19 +71,6 @@ impl StoredToken {
     pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
-
-    fn validate(&self) -> crate::Result<()> {
-        if self.access_token.is_empty() {
-            return Err(crate::Error::Auth("Stored token has empty access_token".into()));
-        }
-        if self.token_type.is_empty() {
-            return Err(crate::Error::Auth("Stored token has empty token_type".into()));
-        }
-        if self.scope.is_empty() {
-            return Err(crate::Error::Auth("Stored token has empty scope".into()));
-        }
-        Ok(())
-    }
 }
 
 /// Returns the default token file path.
@@ -153,17 +85,13 @@ pub fn path() -> Result<PathBuf> {
     Ok(config::data_dir()?.join(TOKEN_FILE))
 }
 
-/// Save token to the specified path atomically.
-///
-/// Writes to a temporary sibling file then renames into place,
-/// so a crash mid-write never leaves a corrupt token file.
+/// Save token to the specified path.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The parent directory cannot be created
-/// - The temporary file cannot be written
-/// - The rename fails
+/// - The file cannot be written
 pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         #[cfg(unix)]
@@ -178,32 +106,22 @@ pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     }
 
     let content = serde_json::to_string_pretty(token)?;
-    let tmp_path = path.with_extension("tmp");
 
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp_path)?;
+        let mut file =
+            OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
     }
 
     #[cfg(not(unix))]
     {
-        fs::write(&tmp_path, &content)?;
+        fs::write(path, &content)?;
     }
-
-    fs::rename(&tmp_path, path).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp_path);
-    })?;
 
     Ok(())
 }
@@ -227,8 +145,6 @@ pub fn load(path: &Path) -> Result<StoredToken> {
             e
         ))
     })?;
-
-    token.validate()?;
 
     Ok(token)
 }
