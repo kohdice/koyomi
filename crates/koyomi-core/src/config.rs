@@ -7,12 +7,19 @@ use crate::{Error, Result};
 const CONFIG_DIR: &str = "koyomi";
 const CLIENT_SECRET_FILE: &str = "client_secret.json";
 
-/// Get the koyomi config directory (`~/.config/koyomi`)
+/// Get the koyomi config directory
+///
+/// Respects `XDG_CONFIG_HOME` if set, otherwise falls back to `~/.config/koyomi`.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
+/// Returns an error if the home directory cannot be determined
+/// (when `XDG_CONFIG_HOME` is not set).
 pub fn config_dir() -> Result<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(xdg).join(CONFIG_DIR));
+    }
+
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("Could not determine home directory".into()))?;
 
