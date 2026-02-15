@@ -24,6 +24,7 @@ impl Client {
     pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .user_agent(format!("koyomi/{}", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self { http })
     }
