@@ -286,6 +286,7 @@ pub(crate) async fn list_events(
 
         if all_events.len() >= config.max_results as usize {
             all_events.truncate(config.max_results as usize);
+            truncated = true;
             break;
         }
 
