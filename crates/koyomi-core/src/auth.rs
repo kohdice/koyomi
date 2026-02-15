@@ -51,6 +51,14 @@ pub async fn login(http: &reqwest::Client) -> Result<()> {
     )
     .await?;
 
+    if token_response.refresh_token.is_none() {
+        return Err(Error::Auth(
+            "Authorization server did not return a refresh token. \
+             Please revoke app access at https://myaccount.google.com/permissions and try again."
+                .into(),
+        ));
+    }
+
     let stored_token = token::StoredToken::from_response(
         token_response.access_token,
         token_response.refresh_token,
@@ -124,7 +132,12 @@ pub fn logout() -> Result<()> {
             eprintln!("Not currently logged in.");
         }
         Err(e) => {
-            return Err(e);
+            warn!("Token file is corrupt or unreadable: {}", e);
+            token::delete()?;
+            info!("Corrupt token file has been removed");
+            eprintln!(
+                "Token file was corrupt and has been removed. Please run 'koyomi login' again."
+            );
         }
     }
 
