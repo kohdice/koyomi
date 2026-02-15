@@ -11,9 +11,8 @@ async fn main() -> ExitCode {
     match koyomi::run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            let code = koyomi::exit_code_for(&e);
             eprintln!("koyomi: {e:#}");
-            ExitCode::from(code)
+            ExitCode::FAILURE
         }
     }
 }
