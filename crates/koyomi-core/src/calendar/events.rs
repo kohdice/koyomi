@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use super::types::{CalendarEvents, Event, EventPeriod};
 use crate::{CalendarError, Result};
 
-pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
+pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
 /// Fields to request from Calendar info endpoint (Partial Response)
 ///
@@ -43,11 +43,30 @@ const MAX_PAGES: u32 = 50;
 
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
-    /// Calendar ID (default: "primary")
-    pub calendar_id: String,
-    pub period: EventPeriod,
-    /// Maximum number of events to return (1..=2500)
-    pub max_results: u32,
+    pub(crate) calendar_id: String,
+    pub(crate) period: EventPeriod,
+    pub(crate) max_results: u32,
+}
+
+impl ListEventsConfig {
+    /// Create a new `ListEventsConfig` with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `calendar_id` is empty
+    /// - `max_results` is outside the range `1..=2500`
+    pub fn new(calendar_id: String, period: EventPeriod, max_results: u32) -> crate::Result<Self> {
+        if calendar_id.is_empty() {
+            return Err(crate::Error::Config("calendar_id must not be empty".into()));
+        }
+        if max_results == 0 || max_results > MAX_RESULTS_LIMIT {
+            return Err(crate::Error::Config(format!(
+                "max_results must be between 1 and {MAX_RESULTS_LIMIT}"
+            )));
+        }
+        Ok(Self { calendar_id, period, max_results })
+    }
 }
 
 impl Default for ListEventsConfig {
@@ -84,7 +103,7 @@ fn status_to_calendar_error(
         429 => CalendarError::RateLimitExceeded,
         400 => CalendarError::BadRequest { message: body },
         status if status >= 500 => CalendarError::ServerError { status, message: body },
-        _ => CalendarError::BadRequest { message: format!("HTTP {}: {}", status, body) },
+        status => CalendarError::UnexpectedStatus { status, message: body },
     }
 }
 
@@ -95,8 +114,8 @@ fn status_to_calendar_error(
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn get_calendar_name(
-    client: &reqwest::Client,
+pub(crate) async fn get_calendar_name(
+    client: &crate::client::Client,
     access_token: &str,
     calendar_id: &str,
     base_url: &str,
@@ -110,7 +129,7 @@ pub async fn get_calendar_name(
 
     debug!("Fetching calendar info: {}", url);
 
-    let response = client.get(&url).bearer_auth(access_token).send().await?;
+    let response = client.get(&url, access_token).await?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -121,7 +140,11 @@ pub async fn get_calendar_name(
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
-    let info: CalendarInfo = response.json().await?;
+    let body = response.text().await?;
+    let info: CalendarInfo =
+        serde_json::from_str(&body).map_err(|e| CalendarError::BadRequest {
+            message: format!("Failed to parse calendar info response: {e}"),
+        })?;
 
     Ok(info.summary.unwrap_or_else(|| calendar_id.to_string()))
 }
@@ -166,8 +189,8 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn list_events(
-    client: &reqwest::Client,
+pub(crate) async fn list_events(
+    client: &crate::client::Client,
     access_token: &str,
     config: &ListEventsConfig,
     base_url: &str,
@@ -190,6 +213,9 @@ pub async fn list_events(
                 "Pagination exceeded {} pages; stopping to prevent infinite loop",
                 MAX_PAGES
             );
+            eprintln!(
+                "Warning: pagination limit ({MAX_PAGES} pages) reached; results may be incomplete."
+            );
             break;
         }
 
@@ -200,7 +226,7 @@ pub async fn list_events(
             config.max_results,
             urlencoding::encode(&time_min.to_rfc3339()),
             urlencoding::encode(&time_max.to_rfc3339()),
-            EVENTS_LIST_FIELDS,
+            urlencoding::encode(EVENTS_LIST_FIELDS),
         );
 
         if let Some(token) = &page_token {
@@ -209,7 +235,7 @@ pub async fn list_events(
 
         debug!("Fetching events: {}", url);
 
-        let response = client.get(&url).bearer_auth(access_token).send().await?;
+        let response = client.get(&url, access_token).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -220,7 +246,11 @@ pub async fn list_events(
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
-        let page: PageResponse = response.json().await?;
+        let body = response.text().await?;
+        let page: PageResponse =
+            serde_json::from_str(&body).map_err(|e| CalendarError::BadRequest {
+                message: format!("Failed to parse events list response: {e}"),
+            })?;
 
         if let Some(items) = page.items {
             all_events.extend(items);
@@ -291,7 +321,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
@@ -308,7 +338,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
@@ -325,7 +355,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
@@ -372,7 +402,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
         let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
@@ -426,7 +456,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
         let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
@@ -500,7 +530,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let result =
             get_calendar_name(&client, "invalid_token", "primary", &mock_server.uri()).await;
 
@@ -519,7 +549,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let result =
             get_calendar_name(&client, "test_token", "private@example.com", &mock_server.uri())
                 .await;
@@ -527,5 +557,105 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.to_string().contains("Access denied to calendar"));
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_unexpected_status_for_unknown_code() {
+        let status = reqwest::StatusCode::from_u16(302).unwrap();
+        let error = status_to_calendar_error(status, "redirect".to_string(), "primary");
+        assert!(matches!(error, CalendarError::UnexpectedStatus { status: 302, .. }));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_empty_calendar_id() {
+        let result = ListEventsConfig::new(String::new(), EventPeriod::Day, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_max_results_zero() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_results must be between"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_max_results_over_limit() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2501);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_results must be between"));
+    }
+
+    #[test]
+    fn list_events_config_new_accepts_valid_params() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Week, 100);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.calendar_id, "primary");
+        assert_eq!(config.period, EventPeriod::Week);
+        assert_eq!(config.max_results, 100);
+    }
+
+    #[test]
+    fn list_events_config_new_accepts_boundary_values() {
+        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 1).is_ok());
+        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2500).is_ok());
+    }
+
+    #[tokio::test]
+    async fn client_get_succeeds_on_first_attempt() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, "token").await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn client_get_retries_on_server_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("error"))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, "token").await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn client_get_gives_up_after_max_retries() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, "token").await.unwrap();
+        assert_eq!(response.status(), 503);
     }
 }

@@ -46,7 +46,7 @@ pub async fn run() -> Result<()> {
 
     match cli.command {
         Commands::Login => {
-            koyomi_core::login(client.http()).await?;
+            koyomi_core::login(&client).await?;
             Ok(())
         }
         Commands::Logout => {
@@ -66,13 +66,9 @@ async fn handle_events(
     details: bool,
     limit: u32,
 ) -> Result<()> {
-    let token = koyomi_core::auth::get_valid_token(client.http()).await?;
+    let token = koyomi_core::get_valid_token(client).await?;
 
-    let config = koyomi_core::calendar::ListEventsConfig {
-        calendar_id: calendar,
-        period: period.into(),
-        max_results: limit,
-    };
+    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, period.into(), limit)?;
 
     let events = client.list_events(&token, &config).await?;
 

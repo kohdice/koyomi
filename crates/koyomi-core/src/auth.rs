@@ -1,6 +1,8 @@
 mod device_flow;
-pub mod refresh;
-pub mod token;
+pub(crate) mod refresh;
+pub(crate) mod token;
+
+pub use token::StoredToken;
 
 use tracing::{debug, info, warn};
 
@@ -15,13 +17,17 @@ use crate::{Error, Result, config};
 /// - The device code request fails
 /// - Token polling times out or is denied
 /// - The token cannot be saved
-pub async fn login(http: &reqwest::Client) -> Result<()> {
+pub async fn login(client: &crate::client::Client) -> Result<()> {
     let secret = config::load()?;
     info!("Loaded OAuth2 client configuration");
 
     debug!("Requesting device code");
-    let device_response =
-        device_flow::start(http, &secret.installed.client_id, device_flow::DEVICE_CODE_URL).await?;
+    let device_response = device_flow::start(
+        client.http(),
+        &secret.installed.client_id,
+        device_flow::DEVICE_CODE_URL,
+    )
+    .await?;
 
     eprintln!();
     eprintln!("To sign in, please visit: {}", device_response.verification_url);
@@ -43,7 +49,7 @@ pub async fn login(http: &reqwest::Client) -> Result<()> {
 
     debug!("Starting token polling");
     let token_response = device_flow::poll(
-        http,
+        client.http(),
         &secret.installed.client_id,
         &secret.installed.client_secret,
         &device_response.device_code,
@@ -90,7 +96,7 @@ const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 /// - The config directory or client secret cannot be loaded
 /// - Token refresh fails
 /// - The new token cannot be saved
-pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToken> {
+pub async fn get_valid_token(client: &crate::client::Client) -> Result<token::StoredToken> {
     let token_path = token::path()?;
     let mut stored_token = token::load(&token_path)?;
 
@@ -101,7 +107,7 @@ pub async fn get_valid_token(http: &reqwest::Client) -> Result<token::StoredToke
         let secret = config::load()?;
 
         let new_token = refresh::refresh_token(
-            http,
+            client.http(),
             &secret.installed.client_id,
             &secret.installed.client_secret,
             &stored_token,
@@ -145,24 +151,4 @@ pub fn logout() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Integration tests for login/logout would require mocking
-    // the external Google OAuth endpoints, which is complex.
-    // Instead, we test the component modules individually.
-
-    #[test]
-    fn token_module_is_accessible() {
-        let _: fn(&std::path::Path) -> Result<token::StoredToken> = token::load;
-    }
-
-    #[test]
-    fn refresh_module_is_accessible() {
-        // Verify refresh module is public
-        let _: &str = refresh::TOKEN_URL;
-    }
 }
