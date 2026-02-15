@@ -113,6 +113,8 @@ pub struct Reminders {
 pub enum ReminderMethod {
     Email,
     Popup,
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +138,8 @@ pub enum EntryPointType {
     Phone,
     Sip,
     More,
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +162,9 @@ pub enum EventStatus {
     /// The event is tentatively confirmed
     Tentative,
     Cancelled,
+    /// Unknown status value from the API (forward-compatibility)
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 impl EventStatus {
@@ -167,6 +174,7 @@ impl EventStatus {
             EventStatus::Confirmed => "confirmed",
             EventStatus::Tentative => "tentative",
             EventStatus::Cancelled => "cancelled",
+            EventStatus::Unknown => "unknown",
         }
     }
 }
@@ -181,6 +189,8 @@ pub enum ResponseStatus {
     /// The attendee has tentatively accepted
     Tentative,
     Accepted,
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -441,5 +451,34 @@ mod tests {
         let error = result.unwrap_err().to_string();
         assert!(error.contains("dateTime"), "Error message should mention 'dateTime': {error}");
         assert!(error.contains("date"), "Error message should mention 'date': {error}");
+    }
+
+    #[test]
+    fn event_status_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<EventStatus>("\"newStatusFromApi\"").unwrap();
+        assert_eq!(result, EventStatus::Unknown);
+    }
+
+    #[test]
+    fn event_status_unknown_as_str() {
+        assert_eq!(EventStatus::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn response_status_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<ResponseStatus>("\"newResponseStatus\"").unwrap();
+        assert_eq!(result, ResponseStatus::Unknown);
+    }
+
+    #[test]
+    fn reminder_method_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<ReminderMethod>("\"sms\"").unwrap();
+        assert_eq!(result, ReminderMethod::Unknown);
+    }
+
+    #[test]
+    fn entry_point_type_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<EntryPointType>("\"newType\"").unwrap();
+        assert_eq!(result, EntryPointType::Unknown);
     }
 }
