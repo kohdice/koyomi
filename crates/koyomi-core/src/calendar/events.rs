@@ -3,7 +3,6 @@ use serde::Deserialize;
 use tracing::{debug, info};
 
 use super::types::{CalendarEvents, Event, EventPeriod};
-use crate::client::AccessToken;
 use crate::{CalendarError, Result};
 
 pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -134,7 +133,7 @@ fn status_to_calendar_error(
 /// - The server returns an error response
 pub(crate) async fn get_calendar_name(
     client: &crate::client::Client,
-    access_token: &AccessToken<'_>,
+    access_token: &str,
     calendar_id: &str,
     base_url: &str,
 ) -> Result<String> {
@@ -215,7 +214,7 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 /// - The server returns an error response
 pub(crate) async fn list_events(
     client: &crate::client::Client,
-    access_token: &AccessToken<'_>,
+    access_token: &str,
     config: &ListEventsConfig,
     base_url: &str,
 ) -> Result<CalendarEvents> {
@@ -304,7 +303,6 @@ pub(crate) async fn list_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::AccessToken;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -353,8 +351,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("test_token");
-        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "My Calendar");
@@ -371,8 +369,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("test_token");
-        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "primary");
@@ -389,8 +387,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("test_token");
-        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -438,9 +436,7 @@ mod tests {
 
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, &AccessToken::new("test_token"), &config, &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -494,9 +490,7 @@ mod tests {
 
         let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, &AccessToken::new("test_token"), &config, &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -569,8 +563,8 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("invalid_token");
-        let result = get_calendar_name(&client, &token, "primary", &mock_server.uri()).await;
+        let token = "invalid_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -588,9 +582,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("test_token");
+        let token = "test_token";
         let result =
-            get_calendar_name(&client, &token, "private@example.com", &mock_server.uri()).await;
+            get_calendar_name(&client, token, "private@example.com", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -653,9 +647,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("token");
+        let token = "token";
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, &token).await.unwrap();
+        let response = client.get(&url, token).await.unwrap();
         assert_eq!(response.status(), 200);
     }
 
@@ -677,9 +671,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("token");
+        let token = "token";
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, &token).await.unwrap();
+        let response = client.get(&url, token).await.unwrap();
         assert_eq!(response.status(), 200);
     }
 
@@ -694,9 +688,9 @@ mod tests {
             .await;
 
         let client = crate::client::Client::new().unwrap();
-        let token = AccessToken::new("token");
+        let token = "token";
         let url = format!("{}/test", mock_server.uri());
-        let response = client.get(&url, &token).await.unwrap();
+        let response = client.get(&url, token).await.unwrap();
         assert_eq!(response.status(), 503);
     }
 }
