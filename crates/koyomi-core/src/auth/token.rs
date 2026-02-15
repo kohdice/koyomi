@@ -1,63 +1,126 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 use crate::{Error, Result, config};
 
 const TOKEN_FILE: &str = "google_tokens.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredToken {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub token_type: String,
-    pub scope: Vec<String>,
-    pub expires_at: DateTime<Utc>,
-    pub obtained_at: DateTime<Utc>,
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) token_type: String,
+    pub(crate) scope: Vec<String>,
+    pub(crate) expires_at: DateTime<Utc>,
+    pub(crate) obtained_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field("token_type", &self.token_type)
+            .field("scope", &self.scope)
+            .field("expires_at", &self.expires_at)
+            .field("obtained_at", &self.obtained_at)
+            .finish()
+    }
 }
 
 impl StoredToken {
-    /// Check if the token has expired
-    pub fn is_expired(&self) -> bool {
-        Utc::now() >= self.expires_at
+    /// Construct a `StoredToken` from an OAuth2 token response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `expires_in` exceeds the range of `i64`.
+    pub fn from_response(
+        access_token: String,
+        refresh_token: Option<String>,
+        token_type: String,
+        scope_str: &str,
+        expires_in: u64,
+    ) -> crate::Result<Self> {
+        let now = Utc::now();
+        let expires_in_secs = i64::try_from(expires_in)
+            .map_err(|_| crate::Error::Auth("Token expiration time overflow".into()))?;
+        Ok(Self {
+            access_token,
+            refresh_token,
+            token_type,
+            scope: scope_str.split_whitespace().map(String::from).collect(),
+            expires_at: now + chrono::TimeDelta::seconds(expires_in_secs),
+            obtained_at: now,
+        })
     }
 
-    /// Check if the token has expired or will expire within the given buffer duration
-    ///
-    /// This is useful for proactively refreshing tokens before they actually expire.
-    /// A recommended buffer is 5 minutes.
-    pub fn is_expired_with_buffer(&self, buffer: chrono::Duration) -> bool {
+    #[must_use]
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+
+    #[must_use]
+    pub fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
+    }
+
+    #[must_use]
+    pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
 }
 
-/// Save token to the specified path
+/// Returns the default token file path.
+///
+/// Uses `XDG_DATA_HOME` (or platform data directory) for token storage,
+/// as tokens are persistent application state, not user-editable configuration.
+///
+/// # Errors
+///
+/// Returns an error if the data directory cannot be determined.
+pub fn path() -> Result<PathBuf> {
+    Ok(config::data_dir()?.join(TOKEN_FILE))
+}
+
+/// Save token to the specified path.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The parent directory cannot be created
 /// - The file cannot be written
-/// - File permissions cannot be set (Unix only)
-pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
+pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::create_dir_all(parent)?;
+        }
     }
 
     let content = serde_json::to_string_pretty(token)?;
 
-    fs::write(path, &content)?;
-
-    // Set permissions to 0600 (owner read/write only) on Unix
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(path, perms)?;
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file =
+            OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, &content)?;
     }
 
     Ok(())
@@ -71,13 +134,17 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 /// - The file does not exist ([`Error::TokenNotFound`])
 /// - The file cannot be read
 /// - The JSON format is invalid
-pub fn load_from_path(path: &Path) -> Result<StoredToken> {
-    if !path.exists() {
-        return Err(Error::TokenNotFound);
-    }
-
-    let content = fs::read_to_string(path)?;
-    let token: StoredToken = serde_json::from_str(&content)?;
+pub fn load(path: &Path) -> Result<StoredToken> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound { Error::TokenNotFound } else { Error::Io(e) }
+    })?;
+    let token: StoredToken = serde_json::from_str(&content).map_err(|e| {
+        Error::Auth(format!(
+            "Corrupt token file at {}: {}. Try running 'koyomi logout' then 'koyomi login' to fix.",
+            path.display(),
+            e
+        ))
+    })?;
 
     Ok(token)
 }
@@ -87,63 +154,18 @@ pub fn load_from_path(path: &Path) -> Result<StoredToken> {
 /// # Errors
 ///
 /// Returns an error if the file exists but cannot be removed.
-pub fn delete_path(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_file(path)?;
+pub fn delete(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
-
-    Ok(())
-}
-
-/// Get the path to the token file
-fn token_path() -> Result<std::path::PathBuf> {
-    Ok(config::config_dir()?.join(TOKEN_FILE))
-}
-
-/// Save token to `~/.config/koyomi/google_tokens.json`
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The parent directory cannot be created
-/// - The file cannot be written
-/// - File permissions cannot be set (Unix only)
-pub fn save(token: &StoredToken) -> Result<()> {
-    let path = token_path()?;
-    save_to_path(token, &path)?;
-    info!("Token saved to {}", path.display());
-    Ok(())
-}
-
-/// Load token from `~/.config/koyomi/google_tokens.json`
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The file does not exist ([`Error::TokenNotFound`])
-/// - The file cannot be read
-/// - The JSON format is invalid
-pub fn load() -> Result<StoredToken> {
-    load_from_path(&token_path()?)
-}
-
-/// Delete token from `~/.config/koyomi/google_tokens.json`
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The config directory cannot be determined
-/// - The file exists but cannot be removed
-pub fn delete() -> Result<()> {
-    delete_path(&token_path()?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::TimeDelta;
     use tempfile::TempDir;
 
     fn create_test_token() -> StoredToken {
@@ -156,7 +178,7 @@ mod tests {
                 "https://www.googleapis.com/auth/calendar.events".to_string(),
                 "openid".to_string(),
             ],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         }
     }
@@ -167,10 +189,10 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        let result = save_to_path(&token, &path);
+        let result = save(&token, &path);
         assert!(result.is_ok());
 
-        let loaded = load_from_path(&path);
+        let loaded = load(&path);
         assert!(loaded.is_ok());
 
         let loaded_token = loaded.unwrap();
@@ -186,10 +208,10 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        save_to_path(&token, &path).unwrap();
+        save(&token, &path).unwrap();
         assert!(path.exists());
 
-        let result = delete_path(&path);
+        let result = delete(&path);
         assert!(result.is_ok());
         assert!(!path.exists());
     }
@@ -199,7 +221,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
-        let result = delete_path(&path);
+        let result = delete(&path);
         assert!(result.is_ok());
     }
 
@@ -208,12 +230,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(TOKEN_FILE);
 
-        let result = load_from_path(&path);
+        let result = load(&path);
         assert!(result.is_err());
 
         let error = result.unwrap_err();
         assert!(matches!(error, Error::TokenNotFound));
-        assert_eq!(error.to_string(), "Token not found");
+        assert!(error.to_string().contains("Token not found"));
     }
 
     #[test]
@@ -225,12 +247,11 @@ mod tests {
         let path = dir.path().join(TOKEN_FILE);
         let token = create_test_token();
 
-        save_to_path(&token, &path).unwrap();
+        save(&token, &path).unwrap();
 
         let metadata = fs::metadata(&path).unwrap();
         let mode = metadata.permissions().mode();
 
-        // Check that the file is only readable/writable by owner (0600)
         assert_eq!(mode & 0o777, 0o600);
     }
 
@@ -244,12 +265,12 @@ mod tests {
             refresh_token: None,
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
-        save_to_path(&token, &path).unwrap();
-        let loaded = load_from_path(&path).unwrap();
+        save(&token, &path).unwrap();
+        let loaded = load(&path).unwrap();
 
         assert!(loaded.refresh_token.is_none());
     }
@@ -262,11 +283,11 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
-        assert!(!token.is_expired());
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -277,11 +298,11 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         };
 
-        assert!(token.is_expired());
+        assert!(token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -292,14 +313,14 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::minutes(3),
+            expires_at: now + TimeDelta::minutes(3),
             obtained_at: now,
         };
 
         // Token expires in 3 minutes, so 5-minute buffer should consider it expired
-        assert!(token.is_expired_with_buffer(Duration::minutes(5)));
+        assert!(token.is_expired(TimeDelta::minutes(5)));
         // But without buffer, it's still valid
-        assert!(!token.is_expired());
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[test]
@@ -310,11 +331,77 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now + Duration::hours(1),
+            expires_at: now + TimeDelta::hours(1),
             obtained_at: now,
         };
 
         // Token expires in 1 hour, so 5-minute buffer should not consider it expired
-        assert!(!token.is_expired_with_buffer(Duration::minutes(5)));
+        assert!(!token.is_expired(TimeDelta::minutes(5)));
+    }
+
+    #[test]
+    fn debug_masks_sensitive_fields() {
+        let token = create_test_token();
+        let debug_output = format!("{:?}", token);
+
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("test_access_token"));
+        assert!(!debug_output.contains("test_refresh_token"));
+        assert!(debug_output.contains("Bearer"));
+    }
+
+    #[test]
+    fn from_response_creates_valid_token() {
+        let token = StoredToken::from_response(
+            "access".to_string(),
+            Some("refresh".to_string()),
+            "Bearer".to_string(),
+            "openid email",
+            3600,
+        )
+        .unwrap();
+
+        assert_eq!(token.access_token(), "access");
+        assert_eq!(token.scope, vec!["openid", "email"]);
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
+    }
+
+    #[test]
+    fn from_response_rejects_overflow_expires_in() {
+        let result = StoredToken::from_response(
+            "access".to_string(),
+            None,
+            "Bearer".to_string(),
+            "openid",
+            u64::MAX,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn access_token_accessor_returns_value() {
+        let token = create_test_token();
+        assert_eq!(token.access_token(), "test_access_token");
+    }
+
+    #[test]
+    fn refresh_token_accessor_returns_value() {
+        let token = create_test_token();
+        assert_eq!(token.refresh_token(), Some("test_refresh_token"));
+    }
+
+    #[test]
+    fn refresh_token_accessor_returns_none_when_absent() {
+        let now = Utc::now();
+        let token = StoredToken {
+            access_token: "test".to_string(),
+            refresh_token: None,
+            token_type: "Bearer".to_string(),
+            scope: vec!["openid".to_string()],
+            expires_at: now + TimeDelta::hours(1),
+            obtained_at: now,
+        };
+        assert_eq!(token.refresh_token(), None);
     }
 }

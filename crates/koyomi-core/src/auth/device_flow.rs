@@ -2,52 +2,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
-pub const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
-pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-pub const SCOPES: &str = "https://www.googleapis.com/auth/calendar openid email profile";
+pub(super) const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
+pub(super) const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// POST /device/code request body
 #[derive(Serialize)]
-pub struct DeviceCodeRequest<'a> {
-    pub client_id: &'a str,
-    pub scope: &'a str,
+struct DeviceCodeRequest<'a> {
+    client_id: &'a str,
+    scope: &'a str,
 }
 
 /// POST /device/code response
 #[derive(Debug, Deserialize)]
-pub struct DeviceCodeResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_url: String,
-    pub expires_in: u64,
-    pub interval: u64,
+pub(super) struct DeviceCodeResponse {
+    pub(super) device_code: String,
+    pub(super) user_code: String,
+    pub(super) verification_url: String,
+    pub(super) expires_in: u64,
+    pub(super) interval: u64,
 }
 
 /// POST /token request body
 #[derive(Serialize)]
-pub struct TokenRequest<'a> {
-    pub client_id: &'a str,
-    pub client_secret: &'a str,
-    pub device_code: &'a str,
-    pub grant_type: &'a str,
+struct TokenRequest<'a> {
+    client_id: &'a str,
+    client_secret: &'a str,
+    device_code: &'a str,
+    grant_type: &'a str,
 }
 
 /// POST /token success response
 #[derive(Debug, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub token_type: String,
-    pub expires_in: u64,
-    pub scope: String,
+pub(super) struct TokenResponse {
+    pub(super) access_token: String,
+    pub(super) refresh_token: Option<String>,
+    pub(super) token_type: String,
+    pub(super) expires_in: u64,
+    pub(super) scope: String,
 }
 
 /// POST /token error response
 #[derive(Debug, Deserialize)]
-pub struct TokenErrorResponse {
-    pub error: String,
-    pub error_description: Option<String>,
+struct TokenErrorResponse {
+    error: String,
+    error_description: Option<String>,
 }
 
 /// Start the device authorization flow
@@ -59,7 +59,7 @@ pub struct TokenErrorResponse {
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn start(
+pub(super) async fn start(
     client: &reqwest::Client,
     client_id: &str,
     device_code_url: &str,
@@ -71,28 +71,30 @@ pub async fn start(
         .await?;
 
     if !response.status().is_success() {
-        let error: TokenErrorResponse = response.json().await?;
-        return Err(Error::Auth(format!(
-            "Failed to get device code: {} - {}",
-            error.error,
-            error.error_description.unwrap_or_default()
-        )));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|e| {
+            tracing::debug!("Failed to read error response body: {}", e);
+            format!("(failed to read response body: {e})")
+        });
+        let message = match serde_json::from_str::<TokenErrorResponse>(&body) {
+            Ok(error) => match error.error_description {
+                Some(desc) => format!("Failed to get device code: {} - {}", error.error, desc),
+                None => format!("Failed to get device code: {}", error.error),
+            },
+            Err(_) => format!("Failed to get device code (HTTP {status}): {body}"),
+        };
+        return Err(Error::Auth(message));
     }
 
-    Ok(response.json().await?)
+    let body = response.text().await?;
+    serde_json::from_str(&body)
+        .map_err(|e| Error::Auth(format!("Failed to parse device code response: {e}")))
 }
 
-#[derive(Debug, Clone)]
-pub struct PollConfig {
-    pub token_url: String,
-    pub initial_interval: u64,
-    pub expires_in: u64,
-}
-
-impl Default for PollConfig {
-    fn default() -> Self {
-        Self { token_url: TOKEN_URL.to_string(), initial_interval: 5, expires_in: 1800 }
-    }
+pub(super) struct PollConfig<'a> {
+    pub(super) token_url: &'a str,
+    pub(super) interval: u64,
+    pub(super) expires_in: u64,
 }
 
 /// Poll for token after user authorization
@@ -104,57 +106,66 @@ impl Default for PollConfig {
 /// - The user denies access
 /// - The device code expires
 /// - The HTTP request fails
-pub async fn poll(
+pub(super) async fn poll(
     client: &reqwest::Client,
     client_id: &str,
     client_secret: &str,
     device_code: &str,
-    config: &PollConfig,
+    config: &PollConfig<'_>,
 ) -> Result<TokenResponse> {
-    // Use std::time::Instant for real wall-clock timeout measurement
-    // This ensures timeout works correctly even in tests with tokio::time::pause()
+    // Use std::time::Instant for real wall-clock timeout measurement.
+    // tokio::time::Instant is affected by tokio::time::pause() in tests,
+    // where it only advances when explicitly driven — meaning the timeout
+    // would never fire in test mode. Using std::time::Instant ensures the
+    // timeout works correctly regardless of the tokio time mode.
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(config.expires_in);
-    let mut interval = config.initial_interval;
+    let mut interval = config.interval;
 
     loop {
         if start_time.elapsed() >= timeout {
-            return Err(Error::Auth("Authorization timed out. Please try again.".into()));
+            return Err(Error::AuthTimeout);
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
 
         let response = client
-            .post(&config.token_url)
+            .post(config.token_url)
             .form(&TokenRequest { client_id, client_secret, device_code, grant_type: GRANT_TYPE })
             .send()
             .await?;
 
+        let status = response.status();
         let body = response.text().await?;
 
-        if let Ok(error) = serde_json::from_str::<TokenErrorResponse>(&body) {
-            match error.error.as_str() {
-                "authorization_pending" => continue,
-                "slow_down" => {
-                    interval += 5;
-                    continue;
-                }
-                "access_denied" => {
-                    return Err(Error::Auth("Access denied by user.".into()));
-                }
-                "expired_token" => {
-                    return Err(Error::Auth(
-                        "Device code expired. Please run 'koyomi login' again.".into(),
-                    ));
-                }
-                _ => {
-                    return Err(Error::Auth(format!(
-                        "Token request failed: {} - {}",
-                        error.error,
-                        error.error_description.unwrap_or_default()
-                    )));
+        if !status.is_success() {
+            if let Ok(error) = serde_json::from_str::<TokenErrorResponse>(&body) {
+                match error.error.as_str() {
+                    "authorization_pending" => continue,
+                    "slow_down" => {
+                        interval += 5;
+                        continue;
+                    }
+                    "access_denied" => {
+                        return Err(Error::AuthAccessDenied);
+                    }
+                    "expired_token" => {
+                        return Err(Error::Auth(
+                            "Device code expired. Please run 'koyomi login' again.".into(),
+                        ));
+                    }
+                    _ => {
+                        let message = match error.error_description {
+                            Some(desc) => {
+                                format!("Token request failed: {} - {}", error.error, desc)
+                            }
+                            None => format!("Token request failed: {}", error.error),
+                        };
+                        return Err(Error::Auth(message));
+                    }
                 }
             }
+            return Err(Error::Auth(format!("Token request failed (HTTP {status}): {body}",)));
         }
 
         let token: TokenResponse = serde_json::from_str(&body)?;
@@ -240,11 +251,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig {
-            token_url: format!("{}/token", mock_server.uri()),
-            initial_interval: 1,
-            expires_in: 60,
-        };
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -284,11 +292,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig {
-            token_url: format!("{}/token", mock_server.uri()),
-            initial_interval: 1,
-            expires_in: 60,
-        };
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -311,11 +316,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig {
-            token_url: format!("{}/token", mock_server.uri()),
-            initial_interval: 1,
-            expires_in: 60,
-        };
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -340,11 +342,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig {
-            token_url: format!("{}/token", mock_server.uri()),
-            initial_interval: 1,
-            expires_in: 60,
-        };
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -382,11 +381,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig {
-            token_url: format!("{}/token", mock_server.uri()),
-            initial_interval: 1,
-            expires_in: 60,
-        };
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 

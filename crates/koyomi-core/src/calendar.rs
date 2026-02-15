@@ -1,9 +1,10 @@
 mod events;
-pub mod types;
+mod types;
 
-pub use events::{CALENDAR_API_BASE_URL, ListEventsConfig, list_events};
+pub(crate) use events::{CALENDAR_API_BASE_URL, list_events};
+pub use events::{ListEventsConfig, MAX_RESULTS_LIMIT};
 pub use types::{
-    Attendee, CalendarEventsResponse, ConferenceData, ConferenceSolution, EntryPoint, Event,
-    EventDateTime, EventPeriod, EventStatus, Organizer, ReminderOverride, Reminders,
-    ResponseStatus,
+    Attendee, CalendarEvents, ConferenceData, ConferenceSolution, EntryPoint, EntryPointType,
+    Event, EventDateTime, EventPeriod, EventStatus, Organizer, ReminderMethod, ReminderOverride,
+    Reminders, ResponseStatus,
 };

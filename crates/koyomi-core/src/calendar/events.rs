@@ -1,193 +1,126 @@
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Local, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use super::types::{
-    Attendee, CalendarEventsResponse, ConferenceData, ConferenceSolution, EntryPoint, Event,
-    EventDateTime, EventPeriod, EventStatus, Organizer, ReminderOverride, Reminders,
-    ResponseStatus,
-};
+use super::types::{CalendarEvents, Event, EventPeriod};
 use crate::{CalendarError, Result};
 
-/// Trait for converting Google API types with optional detail level
-trait ConvertWithDetails<T> {
-    /// Convert with all details included
-    fn convert_detailed(self) -> T;
-    /// Convert with minimal details (for simple output)
-    fn convert_simple(self) -> T;
-    /// Convert based on details flag
-    fn convert(self, details: bool) -> T
-    where
-        Self: Sized,
-    {
-        if details { self.convert_detailed() } else { self.convert_simple() }
-    }
-}
+pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
-/// Base URL for Google Calendar API
-pub const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
+/// Fields to request from Calendar info endpoint (Partial Response)
+///
+/// <https://developers.google.com/calendar/api/guides/performance#partial-response>
+const CALENDAR_INFO_FIELDS: &str = "summary";
 
-const MAX_RESULTS: u32 = 250;
+/// Fields to request from Events list endpoint (Partial Response)
+///
+/// <https://developers.google.com/calendar/api/guides/performance#partial-response>
+const EVENTS_LIST_FIELDS: &str = "\
+    nextPageToken,\
+    items(\
+        id,\
+        summary,\
+        status,\
+        organizer(email,displayName,self),\
+        location,\
+        start(date,dateTime,timeZone),\
+        end(date,dateTime,timeZone),\
+        description,\
+        attendees(email,displayName,responseStatus,resource),\
+        reminders(useDefault,overrides(method,minutes)),\
+        conferenceData(entryPoints(entryPointType,uri),conferenceSolution(name)),\
+        htmlLink\
+    )";
 
-/// Configuration for listing calendar events
+/// Maximum value allowed for `max_results` (Google Calendar API limit)
+pub const MAX_RESULTS_LIMIT: u32 = 2500;
+
+/// Default value for `max_results` (matches Google Calendar API default)
+const DEFAULT_MAX_RESULTS: u32 = 250;
+
+/// Maximum number of pagination requests as a safeguard against infinite loops
+const MAX_PAGES: u32 = 50;
+
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
-    /// Calendar ID (default: "primary")
-    pub calendar_id: String,
-    /// Time period to fetch events for
-    pub period: EventPeriod,
-    /// Whether to include detailed information
-    pub details: bool,
+    pub(crate) calendar_id: String,
+    pub(crate) period: EventPeriod,
+    pub(crate) max_results: u32,
+}
+
+impl ListEventsConfig {
+    /// Create a new `ListEventsConfig` with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `calendar_id` is empty
+    /// - `max_results` is outside the range `1..=2500`
+    pub fn new(calendar_id: String, period: EventPeriod, max_results: u32) -> crate::Result<Self> {
+        if calendar_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
+        }
+        if max_results == 0 || max_results > MAX_RESULTS_LIMIT {
+            return Err(crate::Error::ConfigInvalid(format!(
+                "max_results must be between 1 and {MAX_RESULTS_LIMIT}"
+            )));
+        }
+        Ok(Self { calendar_id, period, max_results })
+    }
 }
 
 impl Default for ListEventsConfig {
     fn default() -> Self {
-        Self { calendar_id: "primary".to_string(), period: EventPeriod::default(), details: false }
+        Self {
+            calendar_id: "primary".to_string(),
+            period: EventPeriod::default(),
+            max_results: DEFAULT_MAX_RESULTS,
+        }
     }
 }
 
-/// Response from Google Calendar Events API
 #[derive(Debug, Deserialize)]
-struct GoogleEventsResponse {
-    items: Option<Vec<GoogleEvent>>,
-    #[serde(rename = "nextPageToken")]
+#[serde(rename_all = "camelCase")]
+struct PageResponse {
+    items: Option<Vec<Event>>,
     next_page_token: Option<String>,
 }
 
-/// Event from Google Calendar API
-#[derive(Debug, Deserialize)]
-struct GoogleEvent {
-    summary: Option<String>,
-    status: Option<EventStatus>,
-    organizer: Option<GoogleOrganizer>,
-    location: Option<String>,
-    start: Option<GoogleEventDateTime>,
-    end: Option<GoogleEventDateTime>,
-    description: Option<String>,
-    #[serde(default)]
-    attendees: Vec<GoogleAttendee>,
-    reminders: Option<GoogleReminders>,
-    #[serde(rename = "conferenceData")]
-    conference_data: Option<GoogleConferenceData>,
-    #[serde(rename = "htmlLink")]
-    html_link: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleOrganizer {
-    email: Option<String>,
-    #[serde(rename = "displayName")]
-    display_name: Option<String>,
-    #[serde(rename = "self")]
-    is_self: Option<bool>,
-}
-
-impl ConvertWithDetails<Organizer> for GoogleOrganizer {
-    fn convert_detailed(self) -> Organizer {
-        Organizer { email: self.email, display_name: self.display_name, is_self: self.is_self }
-    }
-
-    fn convert_simple(self) -> Organizer {
-        Organizer { email: None, display_name: self.display_name, is_self: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleEventDateTime {
-    date: Option<String>,
-    #[serde(rename = "dateTime")]
-    date_time: Option<String>,
-    #[serde(rename = "timeZone")]
-    time_zone: Option<String>,
-}
-
-impl ConvertWithDetails<EventDateTime> for GoogleEventDateTime {
-    fn convert_detailed(self) -> EventDateTime {
-        EventDateTime { date: self.date, date_time: self.date_time, time_zone: self.time_zone }
-    }
-
-    fn convert_simple(self) -> EventDateTime {
-        EventDateTime { date: self.date, date_time: self.date_time, time_zone: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleAttendee {
-    email: Option<String>,
-    #[serde(rename = "displayName")]
-    display_name: Option<String>,
-    #[serde(rename = "responseStatus")]
-    response_status: Option<ResponseStatus>,
-}
-
-impl ConvertWithDetails<Attendee> for GoogleAttendee {
-    fn convert_detailed(self) -> Attendee {
-        Attendee {
-            email: self.email,
-            display_name: self.display_name,
-            response_status: self.response_status,
-        }
-    }
-
-    fn convert_simple(self) -> Attendee {
-        Attendee { email: self.email, display_name: self.display_name, response_status: None }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleReminders {
-    #[serde(rename = "useDefault")]
-    use_default: Option<bool>,
-    #[serde(default)]
-    overrides: Vec<GoogleReminderOverride>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleReminderOverride {
-    method: Option<String>,
-    minutes: Option<i32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleConferenceData {
-    #[serde(rename = "entryPoints", default)]
-    entry_points: Vec<GoogleEntryPoint>,
-    #[serde(rename = "conferenceSolution")]
-    conference_solution: Option<GoogleConferenceSolution>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleEntryPoint {
-    #[serde(rename = "entryPointType")]
-    entry_point_type: Option<String>,
-    uri: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleConferenceSolution {
-    name: Option<String>,
-}
-
-/// Response from Google Calendar API for calendar info
 #[derive(Debug, Deserialize)]
 struct CalendarInfo {
     summary: Option<String>,
 }
 
-/// Convert HTTP status code to CalendarError
+#[derive(Deserialize)]
+struct GoogleApiError {
+    error: GoogleApiErrorBody,
+}
+
+#[derive(Deserialize)]
+struct GoogleApiErrorBody {
+    message: String,
+}
+
+fn extract_error_message(body: &str) -> String {
+    serde_json::from_str::<GoogleApiError>(body)
+        .map(|e| e.error.message)
+        .unwrap_or_else(|_| body.to_string())
+}
+
 fn status_to_calendar_error(
     status: reqwest::StatusCode,
     body: String,
     calendar_id: &str,
 ) -> CalendarError {
+    let message = extract_error_message(&body);
     match status.as_u16() {
         401 => CalendarError::Unauthenticated,
         403 => CalendarError::Forbidden { calendar_id: calendar_id.to_string() },
         404 => CalendarError::NotFound { calendar_id: calendar_id.to_string() },
         429 => CalendarError::RateLimitExceeded,
-        400 => CalendarError::BadRequest { message: body },
-        status if status >= 500 => CalendarError::ServerError { status, message: body },
-        _ => CalendarError::BadRequest { message: format!("HTTP {}: {}", status, body) },
+        400 => CalendarError::BadRequest { message },
+        status if status >= 500 => CalendarError::ServerError { status, message },
+        status => CalendarError::UnexpectedStatus { status, message },
     }
 }
 
@@ -198,28 +131,43 @@ fn status_to_calendar_error(
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn get_calendar_name(
-    client: &reqwest::Client,
+pub(crate) async fn get_calendar_name(
+    client: &crate::client::Client,
     access_token: &str,
     calendar_id: &str,
     base_url: &str,
 ) -> Result<String> {
-    let url = format!("{}/{}", base_url, urlencoding::encode(calendar_id));
+    let url = reqwest::Url::parse_with_params(
+        &format!("{}/{}", base_url, urlencoding::encode(calendar_id)),
+        &[("fields", CALENDAR_INFO_FIELDS)],
+    )
+    .map_err(|e| CalendarError::BadRequest {
+        message: format!("Failed to construct calendar info URL: {e}"),
+    })?;
 
     debug!("Fetching calendar info: {}", url);
 
-    let response =
-        client.get(&url).header("Authorization", format!("Bearer {}", access_token)).send().await?;
+    let response = client.get(url.as_str(), access_token).await?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = response.text().await.unwrap_or_else(|e| {
+            tracing::debug!("Failed to read error response body: {}", e);
+            format!("(failed to read response body: {e})")
+        });
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
-    let info: CalendarInfo = response.json().await?;
+    let body = response.text().await?;
+    let info: CalendarInfo =
+        serde_json::from_str(&body).map_err(|e| CalendarError::BadRequest {
+            message: format!("Failed to parse calendar info response: {e}"),
+        })?;
 
-    Ok(info.summary.unwrap_or_else(|| calendar_id.to_string()))
+    Ok(info.summary.unwrap_or_else(|| {
+        tracing::warn!("Calendar '{}' has no summary; using calendar ID as name", calendar_id);
+        calendar_id.to_string()
+    }))
 }
 
 /// Calculate time range based on period
@@ -239,15 +187,17 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 
     let (start, end) = match period {
         EventPeriod::Day => {
-            let end = today_start + Duration::days(1);
+            let end = today_start + TimeDelta::days(1);
             (today_start, end)
         }
         EventPeriod::Week => {
-            let end = today_start + Duration::days(7);
+            let end = today_start + TimeDelta::days(7);
             (today_start, end)
         }
         EventPeriod::Month => {
-            let end = today_start + Duration::days(30);
+            let end = today_start.checked_add_months(chrono::Months::new(1)).ok_or_else(|| {
+                CalendarError::InvalidTime("failed to add 1 calendar month".into())
+            })?;
             (today_start, end)
         }
     };
@@ -262,60 +212,84 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub async fn list_events(
-    client: &reqwest::Client,
+pub(crate) async fn list_events(
+    client: &crate::client::Client,
     access_token: &str,
     config: &ListEventsConfig,
-    events_base_url: &str,
-    calendars_base_url: &str,
-) -> Result<CalendarEventsResponse> {
+    base_url: &str,
+) -> Result<CalendarEvents> {
     let (time_min, time_max) = calculate_time_range(config.period)?;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
 
     let calendar_name =
-        get_calendar_name(client, access_token, &config.calendar_id, calendars_base_url).await?;
+        get_calendar_name(client, access_token, &config.calendar_id, base_url).await?;
 
     let mut all_events: Vec<Event> = Vec::new();
     let mut page_token: Option<String> = None;
+    let mut page_count: u32 = 0;
+    let mut truncated = false;
 
     loop {
-        let mut url = format!(
-            "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
-            events_base_url,
-            urlencoding::encode(&config.calendar_id),
-            MAX_RESULTS,
-            urlencoding::encode(&time_min.to_rfc3339()),
-            urlencoding::encode(&time_max.to_rfc3339())
-        );
-
-        if let Some(token) = &page_token {
-            url.push_str(&format!("&pageToken={}", urlencoding::encode(token)));
+        page_count += 1;
+        if page_count > MAX_PAGES {
+            tracing::warn!(
+                "Pagination exceeded {} pages; stopping to prevent infinite loop",
+                MAX_PAGES
+            );
+            truncated = true;
+            break;
         }
+
+        let mut params: Vec<(&str, String)> = vec![
+            ("maxResults", config.max_results.to_string()),
+            ("timeMin", time_min.to_rfc3339()),
+            ("timeMax", time_max.to_rfc3339()),
+            ("singleEvents", "true".to_string()),
+            ("orderBy", "startTime".to_string()),
+            ("fields", EVENTS_LIST_FIELDS.to_string()),
+        ];
+        if let Some(token) = &page_token {
+            params.push(("pageToken", token.clone()));
+        }
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/{}/events", base_url, urlencoding::encode(&config.calendar_id)),
+            &params,
+        )
+        .map_err(|e| CalendarError::BadRequest {
+            message: format!("Failed to construct events list URL: {e}"),
+        })?;
 
         debug!("Fetching events: {}", url);
 
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .send()
-            .await?;
+        let response = client.get(url.as_str(), access_token).await?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::debug!("Failed to read error response body: {}", e);
+                format!("(failed to read response body: {e})")
+            });
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
-        let google_response: GoogleEventsResponse = response.json().await?;
+        let body = response.text().await?;
+        let page: PageResponse =
+            serde_json::from_str(&body).map_err(|e| CalendarError::BadRequest {
+                message: format!("Failed to parse events list response: {e}"),
+            })?;
 
-        if let Some(items) = google_response.items {
-            for google_event in items {
-                all_events.push(convert_event(google_event, config.details));
-            }
+        if let Some(items) = page.items {
+            all_events.extend(items);
         }
 
-        match google_response.next_page_token {
+        if all_events.len() >= config.max_results as usize {
+            all_events.truncate(config.max_results as usize);
+            truncated = true;
+            break;
+        }
+
+        match page.next_page_token {
             Some(token) => page_token = Some(token),
             None => break,
         }
@@ -323,60 +297,7 @@ pub async fn list_events(
 
     info!("Found {} events", all_events.len());
 
-    Ok(CalendarEventsResponse { calendar: calendar_name, events: all_events })
-}
-
-/// Convert Google API event to our Event type
-fn convert_event(google: GoogleEvent, details: bool) -> Event {
-    Event {
-        summary: google.summary,
-        status: google.status,
-        organizer: google.organizer.map(|o| o.convert(details)),
-        location: google.location,
-        start: google.start.map(|dt| dt.convert(details)),
-        end: google.end.map(|dt| dt.convert(details)),
-        description: google.description,
-        attendees: google.attendees.into_iter().map(|a| a.convert(details)).collect(),
-        reminders: if details { google.reminders.map(convert_reminders) } else { None },
-        conference_data: google.conference_data.map(|cd| convert_conference(cd, details)),
-        html_link: google.html_link,
-    }
-}
-
-fn convert_reminders(google: GoogleReminders) -> Reminders {
-    Reminders {
-        use_default: google.use_default.unwrap_or(true),
-        overrides: google
-            .overrides
-            .into_iter()
-            .filter_map(|o| Some(ReminderOverride { method: o.method?, minutes: o.minutes? }))
-            .collect(),
-    }
-}
-
-fn convert_conference(google: GoogleConferenceData, details: bool) -> ConferenceData {
-    if details {
-        ConferenceData {
-            entry_points: google
-                .entry_points
-                .into_iter()
-                .filter_map(|ep| {
-                    Some(EntryPoint { entry_point_type: ep.entry_point_type?, uri: ep.uri? })
-                })
-                .collect(),
-            conference_solution: google
-                .conference_solution
-                .and_then(|cs| cs.name.map(|name| ConferenceSolution { name })),
-        }
-    } else {
-        // For simple output, only keep conference solution name
-        ConferenceData {
-            entry_points: vec![],
-            conference_solution: google
-                .conference_solution
-                .and_then(|cs| cs.name.map(|name| ConferenceSolution { name })),
-        }
-    }
+    Ok(CalendarEvents { calendar: calendar_name, events: all_events, truncated })
 }
 
 #[cfg(test)]
@@ -390,7 +311,7 @@ mod tests {
         let config = ListEventsConfig::default();
         assert_eq!(config.calendar_id, "primary");
         assert_eq!(config.period, EventPeriod::Day);
-        assert!(!config.details);
+        assert_eq!(config.max_results, 250);
     }
 
     #[test]
@@ -411,7 +332,8 @@ mod tests {
     fn calculate_time_range_month() {
         let (start, end) = calculate_time_range(EventPeriod::Month).unwrap();
         let diff = end - start;
-        assert_eq!(diff.num_days(), 30);
+        let days = diff.num_days();
+        assert!((28..=31).contains(&days), "Expected 28-31 days for a calendar month, got {days}");
     }
 
     #[tokio::test]
@@ -421,14 +343,16 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/primary"))
             .and(header("Authorization", "Bearer test_token"))
+            .and(query_param("fields", CALENDAR_INFO_FIELDS))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "summary": "My Calendar"
             })))
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let client = crate::client::Client::new().unwrap();
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "My Calendar");
@@ -444,8 +368,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let client = crate::client::Client::new().unwrap();
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "primary");
@@ -461,8 +386,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
-        let result = get_calendar_name(&client, "test_token", "primary", &mock_server.uri()).await;
+        let client = crate::client::Client::new().unwrap();
+        let token = "test_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -487,6 +413,7 @@ mod tests {
             .and(path("/primary/events"))
             .and(query_param("singleEvents", "true"))
             .and(query_param("orderBy", "startTime"))
+            .and(query_param("fields", EVENTS_LIST_FIELDS))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "items": [
                     {
@@ -507,17 +434,15 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, "test_token", &config, &mock_server.uri(), &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.calendar, "My Calendar");
-        assert_eq!(response.events.len(), 1);
-        assert_eq!(response.events[0].summary, Some("Test Event".to_string()));
+        let events = result.unwrap();
+        assert_eq!(events.calendar, "My Calendar");
+        assert_eq!(events.events.len(), 1);
+        assert_eq!(events.events[0].summary, Some("Test Event".to_string()));
     }
 
     #[tokio::test]
@@ -563,128 +488,15 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, "test_token", &config, &mock_server.uri(), &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.events.len(), 2);
-        assert_eq!(response.events[0].summary, Some("Event 1".to_string()));
-        assert_eq!(response.events[1].summary, Some("Event 2".to_string()));
-    }
-
-    #[test]
-    fn convert_event_simple_mode() {
-        let google_event = GoogleEvent {
-            summary: Some("Test".to_string()),
-            status: Some(EventStatus::Confirmed),
-            organizer: Some(GoogleOrganizer {
-                email: Some("test@example.com".to_string()),
-                display_name: Some("Test User".to_string()),
-                is_self: Some(true),
-            }),
-            location: Some("Room A".to_string()),
-            start: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T10:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            end: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T11:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            description: Some("Description".to_string()),
-            attendees: vec![GoogleAttendee {
-                email: Some("attendee@example.com".to_string()),
-                display_name: Some("Attendee".to_string()),
-                response_status: Some(ResponseStatus::Accepted),
-            }],
-            reminders: Some(GoogleReminders {
-                use_default: Some(false),
-                overrides: vec![GoogleReminderOverride {
-                    method: Some("popup".to_string()),
-                    minutes: Some(10),
-                }],
-            }),
-            conference_data: Some(GoogleConferenceData {
-                entry_points: vec![GoogleEntryPoint {
-                    entry_point_type: Some("video".to_string()),
-                    uri: Some("https://meet.google.com/abc".to_string()),
-                }],
-                conference_solution: Some(GoogleConferenceSolution {
-                    name: Some("Google Meet".to_string()),
-                }),
-            }),
-            html_link: Some("https://calendar.google.com/event".to_string()),
-        };
-
-        let event = convert_event(google_event, false);
-
-        // Simple mode: organizer only has display_name
-        assert!(event.organizer.as_ref().unwrap().email.is_none());
-        assert_eq!(event.organizer.as_ref().unwrap().display_name, Some("Test User".to_string()));
-        // Simple mode: no reminders
-        assert!(event.reminders.is_none());
-        // Simple mode: attendee has email and display_name (no response_status)
-        assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
-        assert_eq!(event.attendees[0].display_name, Some("Attendee".to_string()));
-        assert!(event.attendees[0].response_status.is_none());
-        // Simple mode: conference data only has solution name
-        assert!(event.conference_data.as_ref().unwrap().entry_points.is_empty());
-    }
-
-    #[test]
-    fn convert_event_detailed_mode() {
-        let google_event = GoogleEvent {
-            summary: Some("Test".to_string()),
-            status: Some(EventStatus::Confirmed),
-            organizer: Some(GoogleOrganizer {
-                email: Some("test@example.com".to_string()),
-                display_name: Some("Test User".to_string()),
-                is_self: Some(true),
-            }),
-            location: None,
-            start: Some(GoogleEventDateTime {
-                date: None,
-                date_time: Some("2025-12-09T10:00:00+09:00".to_string()),
-                time_zone: Some("Asia/Tokyo".to_string()),
-            }),
-            end: None,
-            description: None,
-            attendees: vec![],
-            reminders: Some(GoogleReminders {
-                use_default: Some(false),
-                overrides: vec![GoogleReminderOverride {
-                    method: Some("popup".to_string()),
-                    minutes: Some(10),
-                }],
-            }),
-            conference_data: Some(GoogleConferenceData {
-                entry_points: vec![GoogleEntryPoint {
-                    entry_point_type: Some("video".to_string()),
-                    uri: Some("https://meet.google.com/abc".to_string()),
-                }],
-                conference_solution: Some(GoogleConferenceSolution {
-                    name: Some("Google Meet".to_string()),
-                }),
-            }),
-            html_link: None,
-        };
-
-        let event = convert_event(google_event, true);
-
-        // Detailed mode: organizer has all fields
-        assert_eq!(event.organizer.as_ref().unwrap().email, Some("test@example.com".to_string()));
-        assert_eq!(event.organizer.as_ref().unwrap().is_self, Some(true));
-        // Detailed mode: has reminders
-        assert!(event.reminders.is_some());
-        assert_eq!(event.reminders.as_ref().unwrap().overrides.len(), 1);
-        // Detailed mode: conference data has entry points
-        assert_eq!(event.conference_data.as_ref().unwrap().entry_points.len(), 1);
+        let events = result.unwrap();
+        assert_eq!(events.events.len(), 2);
+        assert_eq!(events.events[0].summary, Some("Event 1".to_string()));
+        assert_eq!(events.events[1].summary, Some("Event 2".to_string()));
     }
 
     #[test]
@@ -750,9 +562,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
-        let result =
-            get_calendar_name(&client, "invalid_token", "primary", &mock_server.uri()).await;
+        let client = crate::client::Client::new().unwrap();
+        let token = "invalid_token";
+        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -769,13 +581,116 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = crate::client::Client::new().unwrap();
+        let token = "test_token";
         let result =
-            get_calendar_name(&client, "test_token", "private@example.com", &mock_server.uri())
-                .await;
+            get_calendar_name(&client, token, "private@example.com", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.to_string().contains("Access denied to calendar"));
+    }
+
+    #[test]
+    fn status_to_calendar_error_returns_unexpected_status_for_unknown_code() {
+        let status = reqwest::StatusCode::from_u16(302).unwrap();
+        let error = status_to_calendar_error(status, "redirect".to_string(), "primary");
+        assert!(matches!(error, CalendarError::UnexpectedStatus { status: 302, .. }));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_empty_calendar_id() {
+        let result = ListEventsConfig::new(String::new(), EventPeriod::Day, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_max_results_zero() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_results must be between"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_max_results_over_limit() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2501);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_results must be between"));
+    }
+
+    #[test]
+    fn list_events_config_new_accepts_valid_params() {
+        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Week, 100);
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.calendar_id, "primary");
+        assert_eq!(config.period, EventPeriod::Week);
+        assert_eq!(config.max_results, 100);
+    }
+
+    #[test]
+    fn list_events_config_new_accepts_boundary_values() {
+        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 1).is_ok());
+        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2500).is_ok());
+    }
+
+    #[tokio::test]
+    async fn client_get_succeeds_on_first_attempt() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let token = "token";
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, token).await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn client_get_retries_on_server_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("error"))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let token = "token";
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, token).await.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn client_get_gives_up_after_max_retries() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let token = "token";
+        let url = format!("{}/test", mock_server.uri());
+        let response = client.get(&url, token).await.unwrap();
+        assert_eq!(response.status(), 503);
     }
 }

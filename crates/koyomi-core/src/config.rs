@@ -7,27 +7,72 @@ use crate::{Error, Result};
 const CONFIG_DIR: &str = "koyomi";
 const CLIENT_SECRET_FILE: &str = "client_secret.json";
 
-/// Get the koyomi config directory (`~/.config/koyomi`)
+fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or(Error::ConfigDirNotFound)
+}
+
+/// Get the koyomi config directory
+///
+/// Respects `XDG_CONFIG_HOME` if set to a non-empty absolute path,
+/// otherwise falls back to `$HOME/.config/koyomi`.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
-pub fn config_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| Error::Config("Could not determine home directory".into()))?;
+/// Returns an error if the config directory cannot be determined.
+pub(crate) fn config_dir() -> Result<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(&xdg);
+        if !xdg.is_empty() && path.is_absolute() {
+            return Ok(path.join(CONFIG_DIR));
+        }
+        if !xdg.is_empty() && !path.is_absolute() {
+            eprintln!(
+                "koyomi: warning: XDG_CONFIG_HOME is set to a relative path '{}'; using default",
+                xdg
+            );
+        }
+    }
 
-    Ok(home.join(".config").join(CONFIG_DIR))
+    Ok(home_dir()?.join(".config").join(CONFIG_DIR))
+}
+
+/// Get the koyomi data directory for persistent state (e.g. tokens)
+///
+/// Respects `XDG_DATA_HOME` if set to a non-empty absolute path,
+/// otherwise falls back to `$HOME/.local/share/koyomi`.
+///
+/// # Errors
+///
+/// Returns an error if the data directory cannot be determined.
+pub(crate) fn data_dir() -> Result<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        let path = PathBuf::from(&xdg);
+        if !xdg.is_empty() && path.is_absolute() {
+            return Ok(path.join(CONFIG_DIR));
+        }
+    }
+
+    Ok(home_dir()?.join(".local/share").join(CONFIG_DIR))
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ClientSecretFile {
-    pub installed: ClientSecretInstalled,
+pub(crate) struct ClientSecretFile {
+    pub(crate) installed: ClientSecretInstalled,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ClientSecretInstalled {
-    pub client_id: String,
-    pub client_secret: String,
+#[derive(Deserialize)]
+pub(crate) struct ClientSecretInstalled {
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+}
+
+impl std::fmt::Debug for ClientSecretInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecretInstalled")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Load client secret from the specified path
@@ -38,29 +83,51 @@ pub struct ClientSecretInstalled {
 /// - The file cannot be read
 /// - The JSON format is invalid
 /// - `client_id` or `client_secret` is missing or empty
-pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
+pub(crate) fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                let mode = metadata.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "koyomi: warning: {} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
+                        path.display(),
+                        mode,
+                        path.display()
+                    );
+                }
+            }
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                tracing::debug!("Could not check permissions on {}: {}", path.display(), e);
+            }
+            Err(_) => {}
+        }
+    }
+
     let content = std::fs::read_to_string(path).map_err(|e| {
-        Error::Config(format!(
-            "Failed to read {}: {}. Please create this file with your OAuth2 credentials.",
-            path.display(),
-            e
-        ))
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::ConfigFileNotFound { path: path.to_path_buf() }
+        } else {
+            Error::Io(e)
+        }
     })?;
 
     let secret: ClientSecretFile = serde_json::from_str(&content)
-        .map_err(|e| Error::Config(format!("Invalid {CLIENT_SECRET_FILE} format: {e}")))?;
+        .map_err(|e| Error::ConfigInvalid(format!("Invalid {CLIENT_SECRET_FILE} format: {e}")))?;
 
     if secret.installed.client_id.is_empty() {
-        return Err(Error::Config("client_id is missing or empty".into()));
+        return Err(Error::ConfigInvalid("client_id is missing or empty".into()));
     }
     if secret.installed.client_secret.is_empty() {
-        return Err(Error::Config("client_secret is missing or empty".into()));
+        return Err(Error::ConfigInvalid("client_secret is missing or empty".into()));
     }
 
     Ok(secret)
 }
 
-/// Load client secret from `~/.config/koyomi/client_secret.json`
+/// Load client secret from the default config path
 ///
 /// # Errors
 ///
@@ -69,7 +136,7 @@ pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
 /// - The file cannot be read
 /// - The JSON format is invalid
 /// - `client_id` or `client_secret` is missing or empty
-pub fn load() -> Result<ClientSecretFile> {
+pub(crate) fn load() -> Result<ClientSecretFile> {
     let path = config_dir()?.join(CLIENT_SECRET_FILE);
     load_from_path(&path)
 }
@@ -114,6 +181,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("Invalid client_secret.json format"));
     }
 
@@ -132,6 +200,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("client_id is missing or empty"));
     }
 
@@ -150,6 +219,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::ConfigInvalid(_)));
         assert!(error.to_string().contains("client_secret is missing or empty"));
     }
 
@@ -161,7 +231,8 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("Failed to read"));
+        assert!(matches!(error, Error::ConfigFileNotFound { .. }));
+        assert!(error.to_string().contains("Config file not found"));
     }
 
     #[test]

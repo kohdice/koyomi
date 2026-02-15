@@ -4,19 +4,20 @@ members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
-authors = ["kohdice <kohdice.biz@gmail.com>"]
+authors = ["kohdice <k@kohdice.com>"]
+description = "Koyomi is a command-line utility for Calendar."
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.92"
 license = "MIT"
 repository = "https://github.com/kohdice/koyomi"
 
 [workspace.dependencies]
 # local crates
 koyomi-core = { path = "./crates/koyomi-core" }
+koyomi-ui = { path = "./crates/koyomi-ui" }
 
 # non-local crates
-reqwest = { version = "0.12.24", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-tokio = "1.48.0"
-tracing = "0.1.43"
+serde_json = "1.0.149"
+tokio = "1.49.0"
+tracing = "0.1.44"

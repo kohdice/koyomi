@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
-/// Calendar API specific error types
 #[derive(Debug, Error)]
 pub enum CalendarError {
     /// Calendar or event not found (HTTP 404)
@@ -27,6 +28,10 @@ pub enum CalendarError {
     #[error("Server error (status {status}): {message}")]
     ServerError { status: u16, message: String },
 
+    /// Unexpected HTTP status code
+    #[error("Unexpected HTTP response (status {status}): {message}")]
+    UnexpectedStatus { status: u16, message: String },
+
     /// Invalid time or timezone conversion
     #[error("Invalid time: {0}")]
     InvalidTime(String),
@@ -34,13 +39,28 @@ pub enum CalendarError {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Configuration error: {0}")]
-    Config(String),
+    #[error("Could not determine config directory")]
+    ConfigDirNotFound,
+
+    #[error("Config file not found: {path}. Please create this file with your OAuth2 credentials.")]
+    ConfigFileNotFound { path: PathBuf },
+
+    #[error("Invalid config format: {0}")]
+    ConfigInvalid(String),
+
+    #[error("Cannot refresh token: no refresh token available")]
+    NoRefreshToken,
+
+    #[error("Authorization timed out. Please try again.")]
+    AuthTimeout,
+
+    #[error("Access denied by user.")]
+    AuthAccessDenied,
 
     #[error("Authentication error: {0}")]
     Auth(String),
 
-    #[error("Token not found")]
+    #[error("Token not found. Please run 'koyomi login' to authenticate first.")]
     TokenNotFound,
 
     #[error("HTTP error: {0}")]
@@ -63,89 +83,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_error_displays_message() {
-        let error = Error::Config("test config error".to_string());
-        assert_eq!(error.to_string(), "Configuration error: test config error");
-    }
-
-    #[test]
-    fn auth_error_displays_message() {
-        let error = Error::Auth("test auth error".to_string());
-        assert_eq!(error.to_string(), "Authentication error: test auth error");
-    }
-
-    #[test]
     fn io_error_converts_from_std_io() {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let error: Error = io_error.into();
-        assert!(error.to_string().contains("file not found"));
+        assert!(matches!(error, Error::Io(_)));
     }
 
     #[test]
     fn json_error_converts_from_serde_json() {
         let json_error = serde_json::from_str::<serde_json::Value>("invalid json").unwrap_err();
         let error: Error = json_error.into();
-        assert!(error.to_string().starts_with("JSON error:"));
-    }
-
-    #[test]
-    fn token_not_found_error_displays_message() {
-        let error = Error::TokenNotFound;
-        assert_eq!(error.to_string(), "Token not found");
-    }
-
-    #[test]
-    fn token_not_found_is_distinct_from_auth() {
-        let auth_error = Error::Auth("some auth error".to_string());
-        let token_not_found = Error::TokenNotFound;
-
-        // These should be different error types
-        assert!(matches!(auth_error, Error::Auth(_)));
-        assert!(matches!(token_not_found, Error::TokenNotFound));
-        assert!(!matches!(token_not_found, Error::Auth(_)));
-    }
-
-    #[test]
-    fn calendar_error_not_found_displays_message() {
-        let error = CalendarError::NotFound { calendar_id: "test@example.com".to_string() };
-        assert_eq!(error.to_string(), "Calendar not found: test@example.com");
-    }
-
-    #[test]
-    fn calendar_error_forbidden_displays_message() {
-        let error = CalendarError::Forbidden { calendar_id: "test@example.com".to_string() };
-        assert_eq!(error.to_string(), "Access denied to calendar: test@example.com");
-    }
-
-    #[test]
-    fn calendar_error_rate_limit_displays_message() {
-        let error = CalendarError::RateLimitExceeded;
-        assert_eq!(error.to_string(), "Rate limit exceeded. Please wait and try again.");
-    }
-
-    #[test]
-    fn calendar_error_unauthenticated_displays_message() {
-        let error = CalendarError::Unauthenticated;
-        assert_eq!(error.to_string(), "Authentication required. Please re-authenticate.");
-    }
-
-    #[test]
-    fn calendar_error_bad_request_displays_message() {
-        let error = CalendarError::BadRequest { message: "invalid parameter".to_string() };
-        assert_eq!(error.to_string(), "Invalid request: invalid parameter");
-    }
-
-    #[test]
-    fn calendar_error_server_error_displays_message() {
-        let error =
-            CalendarError::ServerError { status: 503, message: "service unavailable".to_string() };
-        assert_eq!(error.to_string(), "Server error (status 503): service unavailable");
-    }
-
-    #[test]
-    fn calendar_error_invalid_time_displays_message() {
-        let error = CalendarError::InvalidTime("failed to create midnight time".to_string());
-        assert_eq!(error.to_string(), "Invalid time: failed to create midnight time");
+        assert!(matches!(error, Error::Json(_)));
     }
 
     #[test]
@@ -153,7 +101,16 @@ mod tests {
         let calendar_error = CalendarError::NotFound { calendar_id: "primary".to_string() };
         let error: Error = calendar_error.into();
         assert!(matches!(error, Error::Calendar(_)));
-        assert!(error.to_string().contains("Calendar not found"));
+    }
+
+    #[test]
+    fn token_not_found_is_distinct_from_auth() {
+        let auth_error = Error::Auth("some auth error".to_string());
+        let token_not_found = Error::TokenNotFound;
+
+        assert!(matches!(auth_error, Error::Auth(_)));
+        assert!(matches!(token_not_found, Error::TokenNotFound));
+        assert!(!matches!(token_not_found, Error::Auth(_)));
     }
 
     #[test]

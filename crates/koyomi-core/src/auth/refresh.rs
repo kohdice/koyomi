@@ -1,4 +1,3 @@
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -20,6 +19,7 @@ struct RefreshRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct RefreshResponse {
     access_token: String,
+    refresh_token: Option<String>,
     token_type: String,
     expires_in: u64,
     scope: String,
@@ -47,9 +47,7 @@ pub async fn refresh_token(
     token: &StoredToken,
     token_url: &str,
 ) -> Result<StoredToken> {
-    let refresh_token = token.refresh_token.as_ref().ok_or_else(|| {
-        Error::Auth("Cannot refresh token: no refresh token available".to_string())
-    })?;
+    let refresh_token = token.refresh_token().ok_or(Error::NoRefreshToken)?;
 
     debug!("Refreshing access token");
 
@@ -65,35 +63,45 @@ pub async fn refresh_token(
         .await?;
 
     if !response.status().is_success() {
-        let error: RefreshErrorResponse = response.json().await?;
-        return Err(Error::Auth(format!(
-            "Failed to refresh token: {} - {}",
-            error.error,
-            error.error_description.unwrap_or_default()
-        )));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|e| {
+            tracing::debug!("Failed to read error response body: {}", e);
+            format!("(failed to read response body: {e})")
+        });
+        let message = match serde_json::from_str::<RefreshErrorResponse>(&body) {
+            Ok(error) if error.error == "invalid_grant" => {
+                let desc = error.error_description.as_deref().unwrap_or("token expired or revoked");
+                format!(
+                    "Failed to refresh token: {} - {}. Please run 'koyomi logout' then 'koyomi login'.",
+                    error.error, desc
+                )
+            }
+            Ok(error) => match error.error_description {
+                Some(desc) => format!("Failed to refresh token: {} - {}", error.error, desc),
+                None => format!("Failed to refresh token: {}", error.error),
+            },
+            Err(_) => format!("Failed to refresh token (HTTP {status}): {body}"),
+        };
+        return Err(Error::Auth(message));
     }
 
-    let refresh_response: RefreshResponse = response.json().await?;
+    let body = response.text().await?;
+    let refresh_response: RefreshResponse = serde_json::from_str(&body)
+        .map_err(|e| Error::Auth(format!("Failed to parse token refresh response: {e}")))?;
 
-    let now = Utc::now();
-    let expires_in_secs = i64::try_from(refresh_response.expires_in)
-        .map_err(|_| Error::Auth("Token expiration time overflow".into()))?;
-    let expires_at = now + chrono::Duration::seconds(expires_in_secs);
-
-    Ok(StoredToken {
-        access_token: refresh_response.access_token,
-        refresh_token: token.refresh_token.clone(),
-        token_type: refresh_response.token_type,
-        scope: refresh_response.scope.split_whitespace().map(String::from).collect(),
-        expires_at,
-        obtained_at: now,
-    })
+    StoredToken::from_response(
+        refresh_response.access_token,
+        refresh_response.refresh_token.or_else(|| token.refresh_token().map(String::from)),
+        refresh_response.token_type,
+        &refresh_response.scope,
+        refresh_response.expires_in,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
+    use chrono::{TimeDelta, Utc};
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -104,8 +112,8 @@ mod tests {
             refresh_token: Some("test_refresh_token".to_string()),
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string(), "email".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         }
     }
 
@@ -137,7 +145,7 @@ mod tests {
         assert_eq!(new_token.access_token, "new_access_token");
         assert_eq!(new_token.refresh_token, Some("test_refresh_token".to_string()));
         assert_eq!(new_token.token_type, "Bearer");
-        assert!(!new_token.is_expired());
+        assert!(!new_token.is_expired(TimeDelta::seconds(0)));
     }
 
     #[tokio::test]
@@ -149,14 +157,15 @@ mod tests {
             refresh_token: None,
             token_type: "Bearer".to_string(),
             scope: vec!["openid".to_string()],
-            expires_at: now - Duration::hours(1),
-            obtained_at: now - Duration::hours(2),
+            expires_at: now - TimeDelta::hours(1),
+            obtained_at: now - TimeDelta::hours(2),
         };
 
         let result = refresh_token(&client, "client_id", "client_secret", &token, TOKEN_URL).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
+        assert!(matches!(error, Error::NoRefreshToken));
         assert!(error.to_string().contains("no refresh token available"));
     }
 

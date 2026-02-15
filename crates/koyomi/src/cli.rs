@@ -6,13 +6,17 @@ const LONG_ABOUT: &str = r#"Command line interface for Koyomi, a calendar tool.
 Its name derives from the Japanese word "暦" (koyomi), meaning calendar."#;
 
 #[derive(Parser, Debug)]
-#[command(version, about = ABOUT, long_about = LONG_ABOUT)]
+#[command(version, about = ABOUT, long_about = LONG_ABOUT, subcommand_required = true)]
 pub struct Cli {
     /// Increase verbosity (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
-    #[clap(subcommand)]
+    /// Suppress informational messages
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
+
+    #[command(subcommand)]
     pub command: Commands,
 }
 
@@ -26,7 +30,7 @@ pub enum Period {
     /// This week's events (next 7 days)
     #[value(alias = "w")]
     Week,
-    /// This month's events (next 30 days)
+    /// This month's events (next 1 calendar month)
     #[value(alias = "m")]
     Month,
 }
@@ -43,11 +47,15 @@ pub enum Commands {
         #[arg(short, long, value_enum, default_value = "day")]
         period: Period,
         /// Calendar ID (default: primary)
-        #[arg(short, long, default_value = "primary")]
+        #[arg(short, long, default_value = "primary",
+              value_parser = clap::builder::NonEmptyStringValueParser::new())]
         calendar: String,
         /// Show detailed event information
         #[arg(short, long)]
         details: bool,
+        /// Maximum number of events to return (1-2500)
+        #[arg(short = 'n', long, default_value_t = 250, value_parser = clap::value_parser!(u32).range(1..=koyomi_core::calendar::MAX_RESULTS_LIMIT as i64))]
+        limit: u32,
     },
 }
 
@@ -62,13 +70,20 @@ mod tests {
     }
 
     #[test]
+    fn cli_rejects_no_subcommand() {
+        let result = Cli::try_parse_from(["koyomi"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn cli_parses_events_command_with_defaults() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Day);
                 assert_eq!(calendar, "primary");
                 assert!(!details);
+                assert_eq!(limit, 250);
             }
             _ => panic!("Expected Events command"),
         }
@@ -95,12 +110,15 @@ mod tests {
             "--calendar",
             "work@example.com",
             "--details",
+            "--limit",
+            "100",
         ]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "work@example.com");
                 assert!(details);
+                assert_eq!(limit, 100);
             }
             _ => panic!("Expected Events command"),
         }
@@ -108,14 +126,50 @@ mod tests {
 
     #[test]
     fn cli_parses_events_command_with_short_options() {
-        let cli = Cli::parse_from(["koyomi", "events", "-p", "m", "-c", "test@example.com", "-d"]);
+        let cli = Cli::parse_from([
+            "koyomi",
+            "events",
+            "-p",
+            "m",
+            "-c",
+            "test@example.com",
+            "-d",
+            "-n",
+            "50",
+        ]);
         match cli.command {
-            Commands::Events { period, calendar, details } => {
+            Commands::Events { period, calendar, details, limit } => {
                 assert_eq!(period, Period::Month);
                 assert_eq!(calendar, "test@example.com");
                 assert!(details);
+                assert_eq!(limit, 50);
             }
             _ => panic!("Expected Events command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_quiet_flag() {
+        let cli = Cli::parse_from(["koyomi", "--quiet", "login"]);
+        assert!(cli.quiet);
+        assert_eq!(cli.verbose, 0);
+    }
+
+    #[test]
+    fn cli_parses_quiet_short_flag() {
+        let cli = Cli::parse_from(["koyomi", "-q", "logout"]);
+        assert!(cli.quiet);
+    }
+
+    #[test]
+    fn cli_quiet_conflicts_with_verbose() {
+        let result = Cli::try_parse_from(["koyomi", "-q", "-v", "events"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_defaults_quiet_to_false() {
+        let cli = Cli::parse_from(["koyomi", "events"]);
+        assert!(!cli.quiet);
     }
 }

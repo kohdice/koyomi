@@ -1,15 +1,18 @@
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
-/// Response containing calendar name and events
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalendarEventsResponse {
+pub struct CalendarEvents {
     pub calendar: String,
     pub events: Vec<Event>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
-/// Calendar event with all relevant fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Event {
+    pub id: Option<String>,
     pub summary: Option<String>,
     pub status: Option<EventStatus>,
     pub organizer: Option<Organizer>,
@@ -20,72 +23,136 @@ pub struct Event {
     #[serde(default)]
     pub attendees: Vec<Attendee>,
     pub reminders: Option<Reminders>,
-    #[serde(rename = "conferenceData")]
     pub conference_data: Option<ConferenceData>,
-    #[serde(rename = "htmlLink")]
     pub html_link: Option<String>,
 }
 
-/// Event date/time representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventDateTime {
-    pub date: Option<String>,
-    #[serde(rename = "dateTime")]
-    pub date_time: Option<String>,
-    #[serde(rename = "timeZone")]
-    pub time_zone: Option<String>,
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EventDateTime {
+    #[serde(rename_all = "camelCase")]
+    DateTime {
+        date_time: String,
+        time_zone: Option<String>,
+    },
+    Date {
+        date: String,
+    },
 }
 
-/// Event organizer information
+impl<'de> Deserialize<'de> for EventDateTime {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            date_time: Option<String>,
+            time_zone: Option<String>,
+            date: Option<String>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        if let Some(date_time) = raw.date_time {
+            chrono::DateTime::parse_from_rfc3339(&date_time).map_err(|e| {
+                serde::de::Error::custom(format!("invalid dateTime '{date_time}': {e}"))
+            })?;
+            Ok(EventDateTime::DateTime { date_time, time_zone: raw.time_zone })
+        } else if let Some(date) = raw.date {
+            chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                .map_err(|e| serde::de::Error::custom(format!("invalid date '{date}': {e}")))?;
+            Ok(EventDateTime::Date { date })
+        } else {
+            Err(serde::de::Error::custom(
+                "EventDateTime requires either 'dateTime' or 'date' field",
+            ))
+        }
+    }
+}
+
+impl EventDateTime {
+    /// Returns the most specific time representation as a string.
+    ///
+    /// For timed events, returns the `dateTime` value.
+    /// For all-day events, returns the `date` value.
+    #[must_use]
+    pub fn to_display_string(&self) -> &str {
+        match self {
+            EventDateTime::DateTime { date_time, .. } => date_time,
+            EventDateTime::Date { date } => date,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Organizer {
     pub email: Option<String>,
-    #[serde(rename = "displayName")]
     pub display_name: Option<String>,
+    /// Google API uses the bare keyword `"self"`, not `"isSelf"`
     #[serde(rename = "self")]
     pub is_self: Option<bool>,
 }
 
-/// Event attendee information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Attendee {
     pub email: Option<String>,
-    #[serde(rename = "displayName")]
     pub display_name: Option<String>,
-    #[serde(rename = "responseStatus")]
     pub response_status: Option<ResponseStatus>,
+    /// Whether this attendee is a resource (e.g. a meeting room)
+    #[serde(default)]
+    pub resource: bool,
 }
 
-/// Reminder settings for an event
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Reminders {
-    #[serde(rename = "useDefault")]
     pub use_default: bool,
     #[serde(default)]
     pub overrides: Vec<ReminderOverride>,
 }
 
-/// Individual reminder override
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReminderMethod {
+    Email,
+    Popup,
+    #[serde(other, rename = "unknown")]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderOverride {
-    pub method: String,
+    pub method: ReminderMethod,
     pub minutes: i32,
 }
 
-/// Conference/meeting information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConferenceData {
-    #[serde(rename = "entryPoints", default)]
+    #[serde(default)]
     pub entry_points: Vec<EntryPoint>,
-    #[serde(rename = "conferenceSolution")]
     pub conference_solution: Option<ConferenceSolution>,
 }
 
-/// Entry point for joining a conference
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EntryPointType {
+    Video,
+    Phone,
+    Sip,
+    More,
+    #[serde(other, rename = "unknown")]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryPoint {
-    #[serde(rename = "entryPointType")]
-    pub entry_point_type: String,
+    pub entry_point_type: EntryPointType,
     pub uri: String,
 }
 
@@ -95,26 +162,26 @@ pub struct ConferenceSolution {
     pub name: String,
 }
 
-/// Event status indicating whether the event is confirmed, tentative, or cancelled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EventStatus {
-    /// The event is confirmed
     Confirmed,
     /// The event is tentatively confirmed
     Tentative,
-    /// The event is cancelled
     Cancelled,
+    /// Unknown status value from the API (forward-compatibility)
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
 impl EventStatus {
-    /// Returns the status as a lowercase string
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             EventStatus::Confirmed => "confirmed",
             EventStatus::Tentative => "tentative",
             EventStatus::Cancelled => "cancelled",
+            EventStatus::Unknown => "unknown",
         }
     }
 }
@@ -125,15 +192,14 @@ impl EventStatus {
 pub enum ResponseStatus {
     /// The attendee has not responded
     NeedsAction,
-    /// The attendee has declined the invitation
     Declined,
     /// The attendee has tentatively accepted
     Tentative,
-    /// The attendee has accepted the invitation
     Accepted,
+    #[serde(other, rename = "unknown")]
+    Unknown,
 }
 
-/// Time period for event listing
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EventPeriod {
     /// Today only
@@ -141,7 +207,7 @@ pub enum EventPeriod {
     Day,
     /// This week (from today to 7 days later)
     Week,
-    /// This month (from today to 30 days later)
+    /// This month (from today to 1 calendar month later)
     Month,
 }
 
@@ -261,16 +327,22 @@ mod tests {
         assert_eq!(event.location, Some("Conference Room".to_string()));
 
         let start = event.start.unwrap();
-        assert_eq!(start.date_time, Some("2025-12-09T10:00:00+09:00".to_string()));
-        assert_eq!(start.time_zone, Some("Asia/Tokyo".to_string()));
+        match &start {
+            EventDateTime::DateTime { date_time, time_zone } => {
+                assert_eq!(date_time, "2025-12-09T10:00:00+09:00");
+                assert_eq!(time_zone.as_deref(), Some("Asia/Tokyo"));
+            }
+            EventDateTime::Date { .. } => panic!("Expected DateTime variant"),
+        }
 
         assert_eq!(event.attendees.len(), 1);
         assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
         assert_eq!(event.attendees[0].response_status, Some(ResponseStatus::Accepted));
+        assert!(!event.attendees[0].resource);
 
         let conference = event.conference_data.unwrap();
         assert_eq!(conference.entry_points.len(), 1);
-        assert_eq!(conference.entry_points[0].entry_point_type, "video");
+        assert_eq!(conference.entry_points[0].entry_point_type, EntryPointType::Video);
         assert_eq!(conference.conference_solution.unwrap().name, "Google Meet");
     }
 
@@ -293,9 +365,12 @@ mod tests {
         assert_eq!(event.summary, Some("All Day Event".to_string()));
 
         let start = event.start.unwrap();
-        assert_eq!(start.date, Some("2025-12-10".to_string()));
-        assert!(start.date_time.is_none());
-        assert!(start.time_zone.is_none());
+        match &start {
+            EventDateTime::Date { date } => {
+                assert_eq!(date, "2025-12-10");
+            }
+            EventDateTime::DateTime { .. } => panic!("Expected Date variant"),
+        }
     }
 
     #[test]
@@ -319,13 +394,45 @@ mod tests {
     }
 
     #[test]
-    fn calendar_events_response_serialize() {
-        let response =
-            CalendarEventsResponse { calendar: "Test Calendar".to_string(), events: vec![] };
+    fn calendar_events_serialize() {
+        let events = CalendarEvents {
+            calendar: "Test Calendar".to_string(),
+            events: vec![],
+            truncated: false,
+        };
 
-        let json = serde_json::to_string(&response).unwrap();
+        let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains("\"calendar\":\"Test Calendar\""));
         assert!(json.contains("\"events\":[]"));
+    }
+
+    #[test]
+    fn attendee_resource_flag_deserializes() {
+        let json = r#"[
+            {
+                "email": "room@resource.calendar.google.com",
+                "displayName": "Room A (10)",
+                "responseStatus": "accepted",
+                "resource": true
+            },
+            {
+                "email": "user@example.com",
+                "displayName": "User",
+                "responseStatus": "accepted",
+                "resource": false
+            },
+            {
+                "email": "user2@example.com",
+                "responseStatus": "needsAction"
+            }
+        ]"#;
+
+        let attendees: Vec<Attendee> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(attendees.len(), 3);
+        assert!(attendees[0].resource);
+        assert!(!attendees[1].resource);
+        assert!(!attendees[2].resource);
     }
 
     #[test]
@@ -342,7 +449,79 @@ mod tests {
 
         assert!(!reminders.use_default);
         assert_eq!(reminders.overrides.len(), 2);
-        assert_eq!(reminders.overrides[0].method, "email");
+        assert_eq!(reminders.overrides[0].method, ReminderMethod::Email);
         assert_eq!(reminders.overrides[0].minutes, 1440);
+    }
+
+    #[test]
+    fn event_date_time_deserialize_neither_date_nor_datetime() {
+        let json = r#"{"timeZone": "Asia/Tokyo"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("dateTime"), "Error message should mention 'dateTime': {error}");
+        assert!(error.contains("date"), "Error message should mention 'date': {error}");
+    }
+
+    #[test]
+    fn event_status_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<EventStatus>("\"newStatusFromApi\"").unwrap();
+        assert_eq!(result, EventStatus::Unknown);
+    }
+
+    #[test]
+    fn event_status_unknown_as_str() {
+        assert_eq!(EventStatus::Unknown.as_str(), "unknown");
+    }
+
+    #[test]
+    fn response_status_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<ResponseStatus>("\"newResponseStatus\"").unwrap();
+        assert_eq!(result, ResponseStatus::Unknown);
+    }
+
+    #[test]
+    fn reminder_method_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<ReminderMethod>("\"sms\"").unwrap();
+        assert_eq!(result, ReminderMethod::Unknown);
+    }
+
+    #[test]
+    fn entry_point_type_unknown_value_deserializes_to_unknown() {
+        let result = serde_json::from_str::<EntryPointType>("\"newType\"").unwrap();
+        assert_eq!(result, EntryPointType::Unknown);
+    }
+
+    #[test]
+    fn event_date_time_rejects_invalid_rfc3339() {
+        let json = r#"{"dateTime": "not-a-date"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid dateTime"), "Expected 'invalid dateTime' in: {error}");
+    }
+
+    #[test]
+    fn event_date_time_rejects_invalid_date() {
+        let json = r#"{"date": "2025-13-40"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid date"), "Expected 'invalid date' in: {error}");
+    }
+
+    #[test]
+    fn event_date_time_accepts_valid_rfc3339() {
+        let json = r#"{"dateTime": "2025-12-09T10:00:00+09:00", "timeZone": "Asia/Tokyo"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn event_date_time_accepts_valid_date() {
+        let json = r#"{"date": "2025-12-09"}"#;
+        let result = serde_json::from_str::<EventDateTime>(json);
+        assert!(result.is_ok());
     }
 }
