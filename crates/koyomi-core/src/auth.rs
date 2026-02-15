@@ -142,6 +142,13 @@ const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 /// - The new token cannot be saved
 pub async fn get_valid_token(client: &crate::client::Client) -> Result<token::StoredToken> {
     let token_path = token::path()?;
+
+    #[cfg(unix)]
+    let _lock = {
+        let lock_path = token_path.with_extension("lock");
+        token::FileLock::acquire(&lock_path)?
+    };
+
     let mut stored_token = token::load(&token_path)?;
 
     let buffer = chrono::TimeDelta::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
@@ -184,6 +191,7 @@ pub fn logout() -> Result<LogoutResult> {
             Ok(LogoutResult::LoggedOut)
         }
         Err(Error::TokenNotFound) => Ok(LogoutResult::NotLoggedIn),
+        Err(Error::Io(io_err)) => Err(Error::Io(io_err)),
         Err(e) => {
             warn!("Token file is corrupt or unreadable: {}", e);
             token::delete(&token_path)?;

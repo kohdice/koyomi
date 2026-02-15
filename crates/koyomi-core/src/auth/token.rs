@@ -6,6 +6,44 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result, config};
 
+/// RAII guard for advisory file lock using `flock(2)`.
+///
+/// Acquires an exclusive lock on construction and releases it on drop.
+#[cfg(unix)]
+pub(crate) struct FileLock {
+    fd: std::os::unix::io::RawFd,
+}
+
+#[cfg(unix)]
+impl FileLock {
+    /// Acquire an exclusive lock on the given path, creating the file if needed.
+    pub(crate) fn acquire(path: &Path) -> Result<Self> {
+        use std::os::unix::io::IntoRawFd;
+
+        let file = fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)?;
+        let fd = file.into_raw_fd();
+
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            return Err(err.into());
+        }
+
+        Ok(Self { fd })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.fd, libc::LOCK_UN);
+            libc::close(self.fd);
+        }
+    }
+}
+
 const TOKEN_FILE: &str = "google_tokens.json";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +109,19 @@ impl StoredToken {
     pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
+
+    fn validate(&self) -> crate::Result<()> {
+        if self.access_token.is_empty() {
+            return Err(crate::Error::Auth("Stored token has empty access_token".into()));
+        }
+        if self.token_type.is_empty() {
+            return Err(crate::Error::Auth("Stored token has empty token_type".into()));
+        }
+        if self.scope.is_empty() {
+            return Err(crate::Error::Auth("Stored token has empty scope".into()));
+        }
+        Ok(())
+    }
 }
 
 /// Returns the default token file path (`~/.config/koyomi/google_tokens.json`).
@@ -82,14 +133,17 @@ pub fn path() -> Result<PathBuf> {
     Ok(config::config_dir()?.join(TOKEN_FILE))
 }
 
-/// Save token to the specified path
+/// Save token to the specified path atomically.
+///
+/// Writes to a temporary sibling file then renames into place,
+/// so a crash mid-write never leaves a corrupt token file.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The parent directory cannot be created
-/// - The file cannot be written
-/// - File permissions cannot be set (Unix only)
+/// - The temporary file cannot be written
+/// - The rename fails
 pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         #[cfg(unix)]
@@ -104,27 +158,30 @@ pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
     }
 
     let content = serde_json::to_string_pretty(token)?;
+    let tmp_path = path.with_extension("tmp");
 
     #[cfg(unix)]
     {
         use std::fs::OpenOptions;
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::fs::PermissionsExt;
 
-        let mut file =
-            OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
-        // mode() は新規作成時のみ適用される。既存ファイルを truncate で開いた場合は
-        // 元の権限が維持されるため、set_permissions で明示的に 0o600 を設定する。
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
 
     #[cfg(not(unix))]
     {
-        fs::write(path, &content)?;
+        fs::write(&tmp_path, &content)?;
     }
+
+    fs::rename(&tmp_path, path)?;
 
     Ok(())
 }
@@ -148,6 +205,8 @@ pub fn load(path: &Path) -> Result<StoredToken> {
             e
         ))
     })?;
+
+    token.validate()?;
 
     Ok(token)
 }
