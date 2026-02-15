@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use koyomi_core::calendar::{CalendarEvents, Event, EventStatus};
+use koyomi_core::calendar::{CalendarEvents, EntryPointType, Event, EventStatus};
 
 /// Renders calendar events as pretty-printed JSON.
 ///
@@ -68,11 +68,8 @@ impl From<&Event> for SimplifiedEvent {
                 .as_ref()
                 .and_then(|o| o.display_name.clone().or_else(|| o.email.clone())),
             location: event.location.clone(),
-            start: event
-                .start
-                .as_ref()
-                .and_then(|dt| dt.date_time.clone().or_else(|| dt.date.clone())),
-            end: event.end.as_ref().and_then(|dt| dt.date_time.clone().or_else(|| dt.date.clone())),
+            start: event.start.as_ref().map(|dt| dt.to_display_string().to_string()),
+            end: event.end.as_ref().map(|dt| dt.to_display_string().to_string()),
             description: event.description.clone(),
             attendees: event
                 .attendees
@@ -86,7 +83,7 @@ impl From<&Event> for SimplifiedEvent {
                     url: cd
                         .entry_points
                         .iter()
-                        .find(|ep| ep.entry_point_type == "video")
+                        .find(|ep| ep.entry_point_type == EntryPointType::Video)
                         .map(|ep| ep.uri.clone()),
                 })
             }),
@@ -99,7 +96,8 @@ impl From<&Event> for SimplifiedEvent {
 mod tests {
     use super::*;
     use koyomi_core::calendar::{
-        Attendee, ConferenceData, ConferenceSolution, EntryPoint, EventDateTime, Organizer,
+        Attendee, ConferenceData, ConferenceSolution, EntryPoint, EntryPointType, EventDateTime,
+        Organizer,
     };
 
     fn sample_events() -> CalendarEvents {
@@ -114,14 +112,12 @@ mod tests {
                     is_self: Some(true),
                 }),
                 location: Some("Room A".to_string()),
-                start: Some(EventDateTime {
-                    date: None,
-                    date_time: Some("2025-12-09T10:00:00+09:00".to_string()),
+                start: Some(EventDateTime::DateTime {
+                    date_time: "2025-12-09T10:00:00+09:00".to_string(),
                     time_zone: Some("Asia/Tokyo".to_string()),
                 }),
-                end: Some(EventDateTime {
-                    date: None,
-                    date_time: Some("2025-12-09T11:00:00+09:00".to_string()),
+                end: Some(EventDateTime::DateTime {
+                    date_time: "2025-12-09T11:00:00+09:00".to_string(),
                     time_zone: Some("Asia/Tokyo".to_string()),
                 }),
                 description: Some("Weekly sync".to_string()),
@@ -134,7 +130,7 @@ mod tests {
                 reminders: None,
                 conference_data: Some(ConferenceData {
                     entry_points: vec![EntryPoint {
-                        entry_point_type: "video".to_string(),
+                        entry_point_type: EntryPointType::Video,
                         uri: "https://meet.google.com/abc-defg-hij".to_string(),
                     }],
                     conference_solution: Some(ConferenceSolution {
@@ -276,11 +272,11 @@ mod tests {
                 conference_data: Some(ConferenceData {
                     entry_points: vec![
                         EntryPoint {
-                            entry_point_type: "phone".to_string(),
+                            entry_point_type: EntryPointType::Phone,
                             uri: "tel:+81-3-4545-0450".to_string(),
                         },
                         EntryPoint {
-                            entry_point_type: "video".to_string(),
+                            entry_point_type: EntryPointType::Video,
                             uri: "https://meet.google.com/xyz-abcd-efg".to_string(),
                         },
                     ],

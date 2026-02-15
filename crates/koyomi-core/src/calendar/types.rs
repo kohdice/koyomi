@@ -24,11 +24,30 @@ pub struct Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EventDateTime {
-    pub date: Option<String>,
-    pub date_time: Option<String>,
-    pub time_zone: Option<String>,
+#[serde(untagged)]
+pub enum EventDateTime {
+    #[serde(rename_all = "camelCase")]
+    DateTime {
+        date_time: String,
+        time_zone: Option<String>,
+    },
+    Date {
+        date: String,
+    },
+}
+
+impl EventDateTime {
+    /// Returns the most specific time representation as a string.
+    ///
+    /// For timed events, returns the `dateTime` value.
+    /// For all-day events, returns the `date` value.
+    #[must_use]
+    pub fn to_display_string(&self) -> &str {
+        match self {
+            EventDateTime::DateTime { date_time, .. } => date_time,
+            EventDateTime::Date { date } => date,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,9 +79,16 @@ pub struct Reminders {
     pub overrides: Vec<ReminderOverride>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReminderMethod {
+    Email,
+    Popup,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderOverride {
-    pub method: String,
+    pub method: ReminderMethod,
     pub minutes: i32,
 }
 
@@ -74,10 +100,19 @@ pub struct ConferenceData {
     pub conference_solution: Option<ConferenceSolution>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EntryPointType {
+    Video,
+    Phone,
+    Sip,
+    More,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryPoint {
-    pub entry_point_type: String,
+    pub entry_point_type: EntryPointType,
     pub uri: String,
 }
 
@@ -246,8 +281,13 @@ mod tests {
         assert_eq!(event.location, Some("Conference Room".to_string()));
 
         let start = event.start.unwrap();
-        assert_eq!(start.date_time, Some("2025-12-09T10:00:00+09:00".to_string()));
-        assert_eq!(start.time_zone, Some("Asia/Tokyo".to_string()));
+        match &start {
+            EventDateTime::DateTime { date_time, time_zone } => {
+                assert_eq!(date_time, "2025-12-09T10:00:00+09:00");
+                assert_eq!(time_zone.as_deref(), Some("Asia/Tokyo"));
+            }
+            EventDateTime::Date { .. } => panic!("Expected DateTime variant"),
+        }
 
         assert_eq!(event.attendees.len(), 1);
         assert_eq!(event.attendees[0].email, Some("attendee@example.com".to_string()));
@@ -256,7 +296,7 @@ mod tests {
 
         let conference = event.conference_data.unwrap();
         assert_eq!(conference.entry_points.len(), 1);
-        assert_eq!(conference.entry_points[0].entry_point_type, "video");
+        assert_eq!(conference.entry_points[0].entry_point_type, EntryPointType::Video);
         assert_eq!(conference.conference_solution.unwrap().name, "Google Meet");
     }
 
@@ -279,9 +319,12 @@ mod tests {
         assert_eq!(event.summary, Some("All Day Event".to_string()));
 
         let start = event.start.unwrap();
-        assert_eq!(start.date, Some("2025-12-10".to_string()));
-        assert!(start.date_time.is_none());
-        assert!(start.time_zone.is_none());
+        match &start {
+            EventDateTime::Date { date } => {
+                assert_eq!(date, "2025-12-10");
+            }
+            EventDateTime::DateTime { .. } => panic!("Expected Date variant"),
+        }
     }
 
     #[test]
@@ -356,7 +399,7 @@ mod tests {
 
         assert!(!reminders.use_default);
         assert_eq!(reminders.overrides.len(), 2);
-        assert_eq!(reminders.overrides[0].method, "email");
+        assert_eq!(reminders.overrides[0].method, ReminderMethod::Email);
         assert_eq!(reminders.overrides[0].minutes, 1440);
     }
 }

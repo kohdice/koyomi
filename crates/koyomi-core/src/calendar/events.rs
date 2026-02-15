@@ -164,15 +164,14 @@ pub async fn list_events(
     client: &reqwest::Client,
     access_token: &str,
     config: &ListEventsConfig,
-    events_base_url: &str,
-    calendars_base_url: &str,
+    base_url: &str,
 ) -> Result<CalendarEvents> {
     let (time_min, time_max) = calculate_time_range(config.period)?;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
 
     let calendar_name =
-        get_calendar_name(client, access_token, &config.calendar_id, calendars_base_url).await?;
+        get_calendar_name(client, access_token, &config.calendar_id, base_url).await?;
 
     let mut all_events: Vec<Event> = Vec::new();
     let mut page_token: Option<String> = None;
@@ -180,7 +179,7 @@ pub async fn list_events(
     loop {
         let mut url = format!(
             "{}/{}/events?maxResults={}&timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&fields={}",
-            events_base_url,
+            base_url,
             urlencoding::encode(&config.calendar_id),
             config.max_results,
             urlencoding::encode(&time_min.to_rfc3339()),
@@ -360,9 +359,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, "test_token", &config, &mock_server.uri(), &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();
@@ -416,9 +413,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let config = ListEventsConfig::default();
-        let result =
-            list_events(&client, "test_token", &config, &mock_server.uri(), &mock_server.uri())
-                .await;
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
 
         assert!(result.is_ok());
         let events = result.unwrap();

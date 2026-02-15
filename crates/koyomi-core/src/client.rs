@@ -48,7 +48,6 @@ impl Client {
             &token.access_token,
             config,
             calendar::CALENDAR_API_BASE_URL,
-            calendar::CALENDAR_API_BASE_URL,
         )
         .await
     }
