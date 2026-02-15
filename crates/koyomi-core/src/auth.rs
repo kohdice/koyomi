@@ -27,17 +27,17 @@ pub async fn login() -> Result<()> {
         device_flow::start(&client, &secret.installed.client_id, device_flow::DEVICE_CODE_URL)
             .await?;
 
-    println!();
-    println!("To sign in, please visit: {}", device_response.verification_url);
-    println!("Enter this code: {}", device_response.user_code);
-    println!();
+    eprintln!();
+    eprintln!("To sign in, please visit: {}", device_response.verification_url);
+    eprintln!("Enter this code: {}", device_response.user_code);
+    eprintln!();
 
     if let Err(e) = open::that(&device_response.verification_url) {
         warn!("Could not open browser automatically: {}", e);
         warn!("Please open the URL manually");
     }
 
-    println!("Waiting for authorization...");
+    eprintln!("Waiting for authorization...");
 
     let poll_config = device_flow::PollConfig {
         token_url: device_flow::TOKEN_URL.to_string(),
@@ -71,8 +71,8 @@ pub async fn login() -> Result<()> {
 
     token::save(&stored_token)?;
 
-    println!();
-    println!("Successfully logged in!");
+    eprintln!();
+    eprintln!("Successfully logged in!");
 
     Ok(())
 }
@@ -124,15 +124,15 @@ pub async fn get_valid_token() -> Result<token::StoredToken> {
 /// # Errors
 ///
 /// Returns an error if the token file exists but cannot be deleted.
-pub async fn logout() -> Result<()> {
+pub fn logout() -> Result<()> {
     match token::load() {
         Ok(_) => {
             token::delete()?;
             info!("Token file has been removed");
-            println!("Successfully logged out.");
+            eprintln!("Successfully logged out.");
         }
         Err(Error::TokenNotFound) => {
-            println!("Not currently logged in.");
+            eprintln!("Not currently logged in.");
         }
         Err(e) => {
             return Err(e);
