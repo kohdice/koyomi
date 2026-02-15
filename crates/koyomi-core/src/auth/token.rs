@@ -48,15 +48,20 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 
     let content = serde_json::to_string_pretty(token)?;
 
-    fs::write(path, &content)?;
-
-    // Set permissions to 0600 (owner read/write only) on Unix
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(path, perms)?;
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file =
+            OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        file.write_all(content.as_bytes())?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, &content)?;
     }
 
     Ok(())
@@ -71,11 +76,9 @@ pub fn save_to_path(token: &StoredToken, path: &Path) -> Result<()> {
 /// - The file cannot be read
 /// - The JSON format is invalid
 pub fn load_from_path(path: &Path) -> Result<StoredToken> {
-    if !path.exists() {
-        return Err(Error::TokenNotFound);
-    }
-
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound { Error::TokenNotFound } else { Error::Io(e) }
+    })?;
     let token: StoredToken = serde_json::from_str(&content)?;
 
     Ok(token)
@@ -87,11 +90,11 @@ pub fn load_from_path(path: &Path) -> Result<StoredToken> {
 ///
 /// Returns an error if the file exists but cannot be removed.
 pub fn delete_path(path: &Path) -> Result<()> {
-    if path.exists() {
-        fs::remove_file(path)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
-
-    Ok(())
 }
 
 fn token_path() -> Result<std::path::PathBuf> {
