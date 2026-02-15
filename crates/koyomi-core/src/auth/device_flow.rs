@@ -91,35 +91,10 @@ pub(super) async fn start(
         .map_err(|e| Error::Auth(format!("Failed to parse device code response: {e}")))
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct PollConfig {
-    token_url: String,
-    initial_interval: u64,
-    expires_in: u64,
-}
-
-impl PollConfig {
-    pub(super) fn new(token_url: String, initial_interval: u64, expires_in: u64) -> Self {
-        Self { token_url, initial_interval: initial_interval.max(1), expires_in: expires_in.max(1) }
-    }
-
-    pub(super) fn token_url(&self) -> &str {
-        &self.token_url
-    }
-
-    pub(super) fn initial_interval(&self) -> u64 {
-        self.initial_interval
-    }
-
-    pub(super) fn expires_in(&self) -> u64 {
-        self.expires_in
-    }
-}
-
-impl Default for PollConfig {
-    fn default() -> Self {
-        Self::new(TOKEN_URL.to_string(), 5, 1800)
-    }
+pub(super) struct PollConfig<'a> {
+    pub(super) token_url: &'a str,
+    pub(super) interval: u64,
+    pub(super) expires_in: u64,
 }
 
 /// Poll for token after user authorization
@@ -136,7 +111,7 @@ pub(super) async fn poll(
     client_id: &str,
     client_secret: &str,
     device_code: &str,
-    config: &PollConfig,
+    config: &PollConfig<'_>,
 ) -> Result<TokenResponse> {
     // Use std::time::Instant for real wall-clock timeout measurement.
     // tokio::time::Instant is affected by tokio::time::pause() in tests,
@@ -144,8 +119,8 @@ pub(super) async fn poll(
     // would never fire in test mode. Using std::time::Instant ensures the
     // timeout works correctly regardless of the tokio time mode.
     let start_time = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(config.expires_in());
-    let mut interval = config.initial_interval();
+    let timeout = std::time::Duration::from_secs(config.expires_in);
+    let mut interval = config.interval;
 
     loop {
         if start_time.elapsed() >= timeout {
@@ -155,7 +130,7 @@ pub(super) async fn poll(
         tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
 
         let response = client
-            .post(config.token_url())
+            .post(config.token_url)
             .form(&TokenRequest { client_id, client_secret, device_code, grant_type: GRANT_TYPE })
             .send()
             .await?;
@@ -276,7 +251,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig::new(format!("{}/token", mock_server.uri()), 1, 60);
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -316,7 +292,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig::new(format!("{}/token", mock_server.uri()), 1, 60);
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -339,7 +316,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig::new(format!("{}/token", mock_server.uri()), 1, 60);
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -364,7 +342,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig::new(format!("{}/token", mock_server.uri()), 1, 60);
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 
@@ -402,7 +381,8 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let config = PollConfig::new(format!("{}/token", mock_server.uri()), 1, 60);
+        let token_url = format!("{}/token", mock_server.uri());
+        let config = PollConfig { token_url: &token_url, interval: 1, expires_in: 60 };
 
         let result = poll(&client, "client-id", "client-secret", "device-code", &config).await;
 

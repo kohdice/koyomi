@@ -88,11 +88,11 @@ pub async fn complete_login(
     client: &crate::client::Client,
     session: &DeviceFlowSession,
 ) -> Result<()> {
-    let poll_config = device_flow::PollConfig::new(
-        device_flow::TOKEN_URL.to_string(),
-        session.interval,
-        session.expires_in,
-    );
+    let poll_config = device_flow::PollConfig {
+        token_url: device_flow::TOKEN_URL,
+        interval: session.interval,
+        expires_in: session.expires_in,
+    };
 
     debug!("Starting token polling");
     let token_response = device_flow::poll(
