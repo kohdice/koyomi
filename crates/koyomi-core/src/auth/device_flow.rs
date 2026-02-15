@@ -86,7 +86,9 @@ pub async fn start(
         return Err(Error::Auth(message));
     }
 
-    Ok(response.json().await?)
+    let body = response.text().await?;
+    serde_json::from_str(&body)
+        .map_err(|e| Error::Auth(format!("Failed to parse device code response: {e}")))
 }
 
 #[derive(Debug, Clone)]

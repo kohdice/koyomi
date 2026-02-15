@@ -86,7 +86,9 @@ pub async fn refresh_token(
         return Err(Error::Auth(message));
     }
 
-    let refresh_response: RefreshResponse = response.json().await?;
+    let body = response.text().await?;
+    let refresh_response: RefreshResponse = serde_json::from_str(&body)
+        .map_err(|e| Error::Auth(format!("Failed to parse token refresh response: {e}")))?;
 
     StoredToken::from_response(
         refresh_response.access_token,
