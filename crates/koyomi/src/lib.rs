@@ -22,11 +22,13 @@ fn init_tracing(verbose: u8) {
         .init();
 }
 
-fn convert_period(period: Period) -> koyomi_core::calendar::EventPeriod {
-    match period {
-        Period::Day => koyomi_core::calendar::EventPeriod::Day,
-        Period::Week => koyomi_core::calendar::EventPeriod::Week,
-        Period::Month => koyomi_core::calendar::EventPeriod::Month,
+impl From<Period> for koyomi_core::calendar::EventPeriod {
+    fn from(period: Period) -> Self {
+        match period {
+            Period::Day => Self::Day,
+            Period::Week => Self::Week,
+            Period::Month => Self::Month,
+        }
     }
 }
 
@@ -45,7 +47,7 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
         Some(Commands::Logout) => {
-            koyomi_core::logout().await?;
+            koyomi_core::logout()?;
             Ok(())
         }
         Some(Commands::Events { period, calendar, details, limit }) => {
@@ -54,7 +56,7 @@ pub async fn run() -> Result<()> {
         None => {
             eprintln!("TUI mode is not yet implemented. Use a subcommand.");
             eprintln!("Run `koyomi --help` for usage information.");
-            std::process::exit(2);
+            Err(anyhow::anyhow!("No subcommand specified"))
         }
     }
 }
@@ -64,7 +66,7 @@ async fn handle_events(period: Period, calendar: String, details: bool, limit: u
 
     let config = koyomi_core::calendar::ListEventsConfig {
         calendar_id: calendar,
-        period: convert_period(period),
+        period: period.into(),
         max_results: limit,
     };
 

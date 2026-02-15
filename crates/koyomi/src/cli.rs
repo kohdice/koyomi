@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(short, long, action = ArgAction::Count, global = true)]
     pub verbose: u8,
 
-    #[clap(subcommand)]
+    #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
