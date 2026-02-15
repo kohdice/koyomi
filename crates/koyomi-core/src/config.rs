@@ -21,6 +21,12 @@ pub fn config_dir() -> Result<PathBuf> {
         if !xdg.is_empty() && path.is_absolute() {
             return Ok(path.join(CONFIG_DIR));
         }
+        if !xdg.is_empty() && !path.is_absolute() {
+            tracing::warn!(
+                "XDG_CONFIG_HOME is set to a relative path '{}'; falling back to ~/.config",
+                xdg
+            );
+        }
     }
 
     let home = dirs::home_dir()
@@ -34,10 +40,19 @@ pub struct ClientSecretFile {
     pub installed: ClientSecretInstalled,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct ClientSecretInstalled {
     pub client_id: String,
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for ClientSecretInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecretInstalled")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Load client secret from the specified path
