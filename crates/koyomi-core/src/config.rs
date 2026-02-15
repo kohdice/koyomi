@@ -64,6 +64,22 @@ impl std::fmt::Debug for ClientSecretInstalled {
 /// - The JSON format is invalid
 /// - `client_id` or `client_secret` is missing or empty
 pub fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                tracing::warn!(
+                    "{} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
+                    path.display(),
+                    mode,
+                    path.display()
+                );
+            }
+        }
+    }
+
     let content = std::fs::read_to_string(path).map_err(|e| {
         Error::Config(format!(
             "Failed to read {}: {}. Please create this file with your OAuth2 credentials.",
