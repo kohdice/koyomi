@@ -7,14 +7,18 @@ use crate::{Error, Result};
 const CONFIG_DIR: &str = "koyomi";
 const CLIENT_SECRET_FILE: &str = "client_secret.json";
 
+fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or(Error::ConfigDirNotFound)
+}
+
 /// Get the koyomi config directory
 ///
-/// Respects `XDG_CONFIG_HOME` if set, otherwise falls back to `~/.config/koyomi`.
+/// Respects `XDG_CONFIG_HOME` if set to a non-empty absolute path,
+/// otherwise falls back to `$HOME/.config/koyomi`.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined
-/// (when `XDG_CONFIG_HOME` is not set).
+/// Returns an error if the config directory cannot be determined.
 pub(crate) fn config_dir() -> Result<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         let path = PathBuf::from(&xdg);
@@ -22,16 +26,33 @@ pub(crate) fn config_dir() -> Result<PathBuf> {
             return Ok(path.join(CONFIG_DIR));
         }
         if !xdg.is_empty() && !path.is_absolute() {
-            tracing::warn!(
-                "XDG_CONFIG_HOME is set to a relative path '{}'; falling back to ~/.config",
+            eprintln!(
+                "koyomi: warning: XDG_CONFIG_HOME is set to a relative path '{}'; using default",
                 xdg
             );
         }
     }
 
-    let home = dirs::home_dir().ok_or(Error::ConfigDirNotFound)?;
+    Ok(home_dir()?.join(".config").join(CONFIG_DIR))
+}
 
-    Ok(home.join(".config").join(CONFIG_DIR))
+/// Get the koyomi data directory for persistent state (e.g. tokens)
+///
+/// Respects `XDG_DATA_HOME` if set to a non-empty absolute path,
+/// otherwise falls back to `$HOME/.local/share/koyomi`.
+///
+/// # Errors
+///
+/// Returns an error if the data directory cannot be determined.
+pub(crate) fn data_dir() -> Result<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        let path = PathBuf::from(&xdg);
+        if !xdg.is_empty() && path.is_absolute() {
+            return Ok(path.join(CONFIG_DIR));
+        }
+    }
+
+    Ok(home_dir()?.join(".local/share").join(CONFIG_DIR))
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,16 +87,22 @@ pub(crate) fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile>
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(metadata) = std::fs::metadata(path) {
-            let mode = metadata.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
-                tracing::warn!(
-                    "{} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
-                    path.display(),
-                    mode,
-                    path.display()
-                );
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                let mode = metadata.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "koyomi: warning: {} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
+                        path.display(),
+                        mode,
+                        path.display()
+                    );
+                }
             }
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                tracing::debug!("Could not check permissions on {}: {}", path.display(), e);
+            }
+            Err(_) => {}
         }
     }
 
