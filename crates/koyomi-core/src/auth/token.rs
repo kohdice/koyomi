@@ -10,12 +10,12 @@ const TOKEN_FILE: &str = "google_tokens.json";
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredToken {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub token_type: String,
-    pub scope: Vec<String>,
-    pub expires_at: DateTime<Utc>,
-    pub obtained_at: DateTime<Utc>,
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) token_type: String,
+    pub(crate) scope: Vec<String>,
+    pub(crate) expires_at: DateTime<Utc>,
+    pub(crate) obtained_at: DateTime<Utc>,
 }
 
 impl std::fmt::Debug for StoredToken {
@@ -55,6 +55,11 @@ impl StoredToken {
             expires_at: now + chrono::TimeDelta::seconds(expires_in_secs),
             obtained_at: now,
         })
+    }
+
+    #[must_use]
+    pub fn access_token(&self) -> &str {
+        &self.access_token
     }
 
     #[must_use]
@@ -100,11 +105,13 @@ pub fn save(token: &StoredToken, path: &Path) -> Result<()> {
         use std::fs::OpenOptions;
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
         let mut file =
             OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
 
     #[cfg(not(unix))]
@@ -337,5 +344,40 @@ mod tests {
         assert!(!debug_output.contains("test_access_token"));
         assert!(!debug_output.contains("test_refresh_token"));
         assert!(debug_output.contains("Bearer"));
+    }
+
+    #[test]
+    fn from_response_creates_valid_token() {
+        let token = StoredToken::from_response(
+            "access".to_string(),
+            Some("refresh".to_string()),
+            "Bearer".to_string(),
+            "openid email",
+            3600,
+        )
+        .unwrap();
+
+        assert_eq!(token.access_token(), "access");
+        assert_eq!(token.scope, vec!["openid", "email"]);
+        assert!(!token.is_expired(TimeDelta::seconds(0)));
+    }
+
+    #[test]
+    fn from_response_rejects_overflow_expires_in() {
+        let result = StoredToken::from_response(
+            "access".to_string(),
+            None,
+            "Bearer".to_string(),
+            "openid",
+            u64::MAX,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("overflow"));
+    }
+
+    #[test]
+    fn access_token_accessor_returns_value() {
+        let token = create_test_token();
+        assert_eq!(token.access_token(), "test_access_token");
     }
 }
