@@ -47,7 +47,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
             Span::styled("● ", theme::EVENT_TIME)
         };
 
-        let time = calendar_grid::format_event_time(event);
+        let time = calendar_grid::format_event_time(event, model.tz);
         let time_span = Span::styled(format!("{time} "), theme::EVENT_TIME);
 
         let title = event.summary.as_deref().unwrap_or("(No title)");

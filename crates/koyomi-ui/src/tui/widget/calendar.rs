@@ -243,7 +243,7 @@ fn render_cell(
                 buf.set_string(x, y + 1 + i as u16, &*truncate_str(&more, cw), ev_style);
                 break;
             }
-            let time = calendar_grid::format_event_time_compact(ev);
+            let time = calendar_grid::format_event_time_compact(ev, model.tz);
             let title = ev.summary.as_deref().unwrap_or("");
             let combined = format!("{time}{title}");
             let text = truncate_str(&combined, cw);

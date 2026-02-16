@@ -30,25 +30,12 @@ pub fn build_month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
 }
 
 /// Extract a `NaiveDate` from an `EventDateTime`, converting to the given timezone.
-pub fn event_date(edt: &EventDateTime, tz: koyomi_core::calendar::TimeZone) -> Option<NaiveDate> {
+pub fn event_date(edt: &EventDateTime, tz: koyomi_core::calendar::TimeZone) -> NaiveDate {
     match edt {
         EventDateTime::DateTime { date_time, .. } => {
-            let offset = tz.fixed_offset();
-            match chrono::DateTime::parse_from_rfc3339(date_time) {
-                Ok(dt) => Some(dt.with_timezone(&offset).date_naive()),
-                Err(e) => {
-                    tracing::debug!("Failed to parse RFC 3339 datetime '{date_time}': {e}");
-                    None
-                }
-            }
+            date_time.with_timezone(&tz.fixed_offset()).date_naive()
         }
-        EventDateTime::Date { date } => match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-            Ok(d) => Some(d),
-            Err(e) => {
-                tracing::debug!("Failed to parse date '{date}': {e}");
-                None
-            }
-        },
+        EventDateTime::Date { date } => *date,
     }
 }
 
@@ -58,23 +45,15 @@ pub fn events_for_date(
     date: NaiveDate,
     tz: koyomi_core::calendar::TimeZone,
 ) -> Vec<&Event> {
-    events
-        .iter()
-        .filter(|e| e.start.as_ref().and_then(|s| event_date(s, tz)).is_some_and(|d| d == date))
-        .collect()
+    events.iter().filter(|e| e.start.as_ref().is_some_and(|s| event_date(s, tz) == date)).collect()
 }
 
 /// Format the start time of an event for display in calendar cells.
-pub fn format_event_time(event: &Event) -> String {
+pub fn format_event_time(event: &Event, tz: koyomi_core::calendar::TimeZone) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            match chrono::DateTime::parse_from_rfc3339(date_time) {
-                Ok(dt) => format!("{}", dt.format("%H:%M")),
-                Err(e) => {
-                    tracing::debug!("format_event_time: failed to parse '{date_time}': {e}");
-                    String::new()
-                }
-            }
+            let local = date_time.with_timezone(&tz.fixed_offset());
+            format!("{}", local.format("%H:%M"))
         }
         Some(EventDateTime::Date { .. }) => "All day".to_string(),
         None => String::new(),
@@ -85,18 +64,11 @@ pub fn format_event_time(event: &Event) -> String {
 ///
 /// Returns `"HH:"` (hour + colon, 3 chars) for timed events,
 /// `"00:"` for all-day events, or an empty string if no start time.
-pub fn format_event_time_compact(event: &Event) -> String {
+pub fn format_event_time_compact(event: &Event, tz: koyomi_core::calendar::TimeZone) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            match chrono::DateTime::parse_from_rfc3339(date_time) {
-                Ok(dt) => format!("{}:", dt.format("%H")),
-                Err(e) => {
-                    tracing::debug!(
-                        "format_event_time_compact: failed to parse '{date_time}': {e}"
-                    );
-                    String::new()
-                }
-            }
+            let local = date_time.with_timezone(&tz.fixed_offset());
+            format!("{}:", local.format("%H"))
         }
         Some(EventDateTime::Date { .. }) => "00:".to_string(),
         None => String::new(),
@@ -159,18 +131,18 @@ mod tests {
     fn event_date_parses_datetime() {
         use koyomi_core::calendar::TimeZone;
         let edt = EventDateTime::DateTime {
-            date_time: "2026-02-16T10:00:00+09:00".to_string(),
+            date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T10:00:00+09:00").unwrap(),
             time_zone: Some("Asia/Tokyo".to_string()),
         };
-        let date = event_date(&edt, TimeZone::Jst).unwrap();
+        let date = event_date(&edt, TimeZone::Jst);
         assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
     }
 
     #[test]
     fn event_date_parses_all_day() {
         use koyomi_core::calendar::TimeZone;
-        let edt = EventDateTime::Date { date: "2026-02-16".to_string() };
-        let date = event_date(&edt, TimeZone::Jst).unwrap();
+        let edt = EventDateTime::Date { date: NaiveDate::from_ymd_opt(2026, 2, 16).unwrap() };
+        let date = event_date(&edt, TimeZone::Jst);
         assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
     }
 
@@ -179,12 +151,12 @@ mod tests {
         use koyomi_core::calendar::TimeZone;
         // UTC 23:30 on Feb 16 → JST 08:30 on Feb 17
         let edt = EventDateTime::DateTime {
-            date_time: "2026-02-16T23:30:00+00:00".to_string(),
+            date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T23:30:00+00:00").unwrap(),
             time_zone: Some("UTC".to_string()),
         };
-        let date_utc = event_date(&edt, TimeZone::Utc).unwrap();
+        let date_utc = event_date(&edt, TimeZone::Utc);
         assert_eq!(date_utc, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
-        let date_jst = event_date(&edt, TimeZone::Jst).unwrap();
+        let date_jst = event_date(&edt, TimeZone::Jst);
         assert_eq!(date_jst, NaiveDate::from_ymd_opt(2026, 2, 17).unwrap());
     }
 
@@ -215,28 +187,48 @@ mod tests {
 
     #[test]
     fn format_event_time_compact_timed_event() {
+        use koyomi_core::calendar::TimeZone;
         let event = test_event(
             Some(EventDateTime::DateTime {
-                date_time: "2026-02-16T09:30:00+09:00".to_string(),
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T09:30:00+09:00")
+                    .unwrap(),
                 time_zone: Some("Asia/Tokyo".to_string()),
             }),
             Some("Meeting"),
         );
-        assert_eq!(format_event_time_compact(&event), "09:");
+        assert_eq!(format_event_time_compact(&event, TimeZone::Jst), "09:");
+    }
+
+    #[test]
+    fn format_event_time_compact_converts_timezone() {
+        use koyomi_core::calendar::TimeZone;
+        // UTC 23:00 → JST 08:00 next day
+        let event = test_event(
+            Some(EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T23:00:00+00:00")
+                    .unwrap(),
+                time_zone: Some("UTC".to_string()),
+            }),
+            Some("Late UTC meeting"),
+        );
+        assert_eq!(format_event_time_compact(&event, TimeZone::Utc), "23:");
+        assert_eq!(format_event_time_compact(&event, TimeZone::Jst), "08:");
     }
 
     #[test]
     fn format_event_time_compact_all_day_event() {
+        use koyomi_core::calendar::TimeZone;
         let event = test_event(
-            Some(EventDateTime::Date { date: "2026-02-16".to_string() }),
+            Some(EventDateTime::Date { date: NaiveDate::from_ymd_opt(2026, 2, 16).unwrap() }),
             Some("Holiday"),
         );
-        assert_eq!(format_event_time_compact(&event), "00:");
+        assert_eq!(format_event_time_compact(&event, TimeZone::Jst), "00:");
     }
 
     #[test]
     fn format_event_time_compact_no_start() {
+        use koyomi_core::calendar::TimeZone;
         let event = test_event(None, None);
-        assert_eq!(format_event_time_compact(&event), "");
+        assert_eq!(format_event_time_compact(&event, TimeZone::Jst), "");
     }
 }

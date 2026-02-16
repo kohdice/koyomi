@@ -7,7 +7,7 @@ use crate::tui::calendar_grid::{self, events_for_date};
 use crate::tui::model::{Focus, Model};
 use crate::tui::theme;
 
-pub fn render(f: &mut Frame, area: Rect, model: &mut Model) {
+pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     let border_style = if model.focus == Focus::EventDetail {
         theme::FOCUSED_BORDER
     } else {
@@ -40,24 +40,27 @@ pub fn render(f: &mut Frame, area: Rect, model: &mut Model) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let lines = build_detail_lines(event);
+    let lines = build_detail_lines(event, model.tz);
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 
     let content_height = paragraph.line_count(inner.width);
     let max_scroll = content_height.saturating_sub(inner.height as usize) as u16;
-    model.detail_scroll_offset = model.detail_scroll_offset.min(max_scroll);
+    let scroll_offset = model.detail_scroll_offset.min(max_scroll);
 
-    let paragraph = paragraph.scroll((model.detail_scroll_offset, 0));
+    let paragraph = paragraph.scroll((scroll_offset, 0));
     f.render_widget(paragraph, inner);
 }
 
-fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>> {
+fn build_detail_lines(
+    event: &koyomi_core::calendar::Event,
+    tz: koyomi_core::calendar::TimeZone,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     if let (Some(_start), Some(end)) = (&event.start, &event.end) {
-        let start_str = calendar_grid::format_event_time(event);
-        let end_str = end.to_display_string().to_string();
+        let start_str = calendar_grid::format_event_time(event, tz);
+        let end_str = end.to_display_string();
         lines.push(Line::from(Span::styled("Time:", theme::DETAIL_LABEL)));
         lines.push(Line::from(format!("  • {start_str} — {end_str}")));
         lines.push(Line::from(""));

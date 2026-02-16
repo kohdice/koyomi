@@ -86,7 +86,7 @@ impl App {
         self.handle_message_chain(initial_msg, &msg_tx);
 
         loop {
-            self.terminal.draw(|f| view(&mut self.model, f))?;
+            self.terminal.draw(|f| view(&self.model, f))?;
 
             if self.model.should_quit {
                 break;
@@ -243,15 +243,18 @@ fn distribute_events(
     }
 
     for event in events {
-        if let Some(start) = &event.start
-            && let Some(date) = calendar_grid::event_date(start, tz)
-        {
+        if let Some(start) = &event.start {
+            let date = calendar_grid::event_date(start, tz);
             let key = (date.year(), date.month());
             if let Some(bucket) = map.get_mut(&key) {
                 bucket.push(event);
                 continue;
             }
         }
+        debug!(
+            summary = event.summary.as_deref().unwrap_or("<no summary>"),
+            "Dropping event: no start date or outside prefetch range"
+        );
     }
 
     map
@@ -309,7 +312,8 @@ mod tests {
             organizer: None,
             location: None,
             start: Some(EventDateTime::DateTime {
-                date_time: "2025-10-15T10:00:00+09:00".to_string(),
+                date_time: chrono::DateTime::parse_from_rfc3339("2025-10-15T10:00:00+09:00")
+                    .unwrap(),
                 time_zone: Some("Asia/Tokyo".to_string()),
             }),
             end: None,
@@ -336,7 +340,8 @@ mod tests {
             organizer: None,
             location: None,
             start: Some(EventDateTime::DateTime {
-                date_time: "2024-01-15T10:00:00+09:00".to_string(),
+                date_time: chrono::DateTime::parse_from_rfc3339("2024-01-15T10:00:00+09:00")
+                    .unwrap(),
                 time_zone: Some("Asia/Tokyo".to_string()),
             }),
             end: None,
@@ -363,7 +368,9 @@ mod tests {
             status: None,
             organizer: None,
             location: None,
-            start: Some(EventDateTime::Date { date: "2026-01-01".to_string() }),
+            start: Some(EventDateTime::Date {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            }),
             end: None,
             description: None,
             attendees: Vec::new(),

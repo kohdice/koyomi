@@ -27,17 +27,10 @@ pub struct Event {
     pub html_link: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum EventDateTime {
-    #[serde(rename_all = "camelCase")]
-    DateTime {
-        date_time: String,
-        time_zone: Option<String>,
-    },
-    Date {
-        date: String,
-    },
+    DateTime { date_time: chrono::DateTime<chrono::FixedOffset>, time_zone: Option<String> },
+    Date { date: chrono::NaiveDate },
 }
 
 impl<'de> Deserialize<'de> for EventDateTime {
@@ -55,14 +48,14 @@ impl<'de> Deserialize<'de> for EventDateTime {
 
         let raw = Raw::deserialize(deserializer)?;
 
-        if let Some(date_time) = raw.date_time {
-            chrono::DateTime::parse_from_rfc3339(&date_time).map_err(|e| {
-                serde::de::Error::custom(format!("invalid dateTime '{date_time}': {e}"))
+        if let Some(date_time_str) = raw.date_time {
+            let date_time = chrono::DateTime::parse_from_rfc3339(&date_time_str).map_err(|e| {
+                serde::de::Error::custom(format!("invalid dateTime '{date_time_str}': {e}"))
             })?;
             Ok(EventDateTime::DateTime { date_time, time_zone: raw.time_zone })
-        } else if let Some(date) = raw.date {
-            chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
-                .map_err(|e| serde::de::Error::custom(format!("invalid date '{date}': {e}")))?;
+        } else if let Some(date_str) = raw.date {
+            let date = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                .map_err(|e| serde::de::Error::custom(format!("invalid date '{date_str}': {e}")))?;
             Ok(EventDateTime::Date { date })
         } else {
             Err(serde::de::Error::custom(
@@ -72,16 +65,41 @@ impl<'de> Deserialize<'de> for EventDateTime {
     }
 }
 
-impl EventDateTime {
-    /// Returns the most specific time representation as a string.
-    ///
-    /// For timed events, returns the `dateTime` value.
-    /// For all-day events, returns the `date` value.
-    #[must_use]
-    pub fn to_display_string(&self) -> &str {
+impl Serialize for EventDateTime {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
         match self {
-            EventDateTime::DateTime { date_time, .. } => date_time,
-            EventDateTime::Date { date } => date,
+            EventDateTime::DateTime { date_time, time_zone } => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("dateTime", &date_time.to_rfc3339())?;
+                if let Some(tz) = time_zone {
+                    map.serialize_entry("timeZone", tz)?;
+                }
+                map.end()
+            }
+            EventDateTime::Date { date } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("date", &date.format("%Y-%m-%d").to_string())?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl EventDateTime {
+    /// Returns the most specific time representation as a formatted string.
+    ///
+    /// For timed events, returns the RFC 3339 `dateTime` value.
+    /// For all-day events, returns the `date` value in `YYYY-MM-DD` format.
+    #[must_use]
+    pub fn to_display_string(&self) -> String {
+        match self {
+            EventDateTime::DateTime { date_time, .. } => date_time.to_rfc3339(),
+            EventDateTime::Date { date } => date.format("%Y-%m-%d").to_string(),
         }
     }
 }
@@ -323,7 +341,9 @@ mod tests {
         let start = event.start.unwrap();
         match &start {
             EventDateTime::DateTime { date_time, time_zone } => {
-                assert_eq!(date_time, "2025-12-09T10:00:00+09:00");
+                let expected =
+                    chrono::DateTime::parse_from_rfc3339("2025-12-09T10:00:00+09:00").unwrap();
+                assert_eq!(*date_time, expected);
                 assert_eq!(time_zone.as_deref(), Some("Asia/Tokyo"));
             }
             EventDateTime::Date { .. } => panic!("Expected DateTime variant"),
@@ -361,7 +381,8 @@ mod tests {
         let start = event.start.unwrap();
         match &start {
             EventDateTime::Date { date } => {
-                assert_eq!(date, "2025-12-10");
+                let expected = chrono::NaiveDate::from_ymd_opt(2025, 12, 10).unwrap();
+                assert_eq!(*date, expected);
             }
             EventDateTime::DateTime { .. } => panic!("Expected Date variant"),
         }

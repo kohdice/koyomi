@@ -286,9 +286,7 @@ mod tests {
                 status: None,
                 organizer: None,
                 location: None,
-                start: Some(koyomi_core::calendar::EventDateTime::Date {
-                    date: date.format("%Y-%m-%d").to_string(),
-                }),
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
                 end: None,
                 description: None,
                 attendees: Vec::new(),
