@@ -171,10 +171,7 @@ async fn get_calendar_info(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            tracing::debug!("Failed to read error response body: {}", e);
-            format!("(failed to read response body: {e})")
-        });
+        let body = crate::client::read_error_body(response).await;
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
@@ -257,10 +254,7 @@ pub(crate) async fn list_events(
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|e| {
-                tracing::debug!("Failed to read error response body: {}", e);
-                format!("(failed to read response body: {e})")
-            });
+            let body = crate::client::read_error_body(response).await;
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
