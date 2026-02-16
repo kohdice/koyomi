@@ -23,16 +23,6 @@ fn init_tracing(verbose: u8) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {e}"))
 }
 
-impl From<Period> for koyomi_core::calendar::EventPeriod {
-    fn from(period: Period) -> Self {
-        match period {
-            Period::Day => Self::Day,
-            Period::Week => Self::Week,
-            Period::Month => Self::Month,
-        }
-    }
-}
-
 /// Run the CLI application
 ///
 /// # Errors
@@ -42,11 +32,13 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
 
+    let tz = cli.timezone.unwrap_or_default();
+
     match cli.command {
         None => {
             let client = koyomi_core::Client::new()?;
             let token = koyomi_core::get_valid_token(&client).await?;
-            koyomi_ui::tui::run(client, token, cli.calendar).await?;
+            koyomi_ui::tui::run(client, token, cli.calendar, tz).await?;
             Ok(())
         }
         Some(Commands::Login) => {
@@ -59,7 +51,7 @@ pub async fn run() -> Result<()> {
         }
         Some(Commands::Events { period, calendar, details, limit }) => {
             let client = koyomi_core::Client::new()?;
-            handle_events(&client, period, calendar, details, limit).await
+            handle_events(&client, period, calendar, details, limit, tz).await
         }
     }
 }
@@ -123,10 +115,17 @@ async fn handle_events(
     calendar: String,
     details: bool,
     limit: u32,
+    tz: koyomi_core::calendar::TimeZone,
 ) -> Result<()> {
     let token = koyomi_core::get_valid_token(client).await?;
 
-    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, period.into(), limit)?;
+    let today = tz.today();
+    let (time_min, time_max) = match period {
+        Period::Day => koyomi_core::calendar::time_range::for_day(today, tz)?,
+        Period::Week => koyomi_core::calendar::time_range::for_week(today, tz)?,
+        Period::Month => koyomi_core::calendar::time_range::for_month(today, tz)?,
+    };
+    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, time_min, time_max, limit)?;
 
     let events = client.list_events(&token, &config).await?;
 
