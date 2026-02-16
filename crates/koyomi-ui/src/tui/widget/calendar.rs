@@ -160,7 +160,7 @@ fn calculate_row_layout(inner: Rect) -> ([u16; 6], [u16; 6], [u16; 5]) {
 
 fn format_title(model: &Model) -> String {
     let month = MONTH_NAMES.get(model.current_month as usize).unwrap_or(&"???");
-    let label = if model.loading {
+    let label = if model.is_current_month_loading() {
         " (Loading...)".to_string()
     } else {
         model.calendar_name.as_deref().map(|n| format!(" ({n})")).unwrap_or_default()

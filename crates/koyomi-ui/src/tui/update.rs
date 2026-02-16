@@ -106,20 +106,17 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             None
         }
 
-        Message::RequestEvents { .. } => {
-            model.loading = true;
+        Message::RequestEvents => {
             model.error_message = None;
             None
         }
-        Message::EventsLoaded { year, month, calendar_name, events } => {
-            model.events_cache.insert((year, month), events);
+        Message::EventsLoaded { calendar_name, events_by_month } => {
+            model.events_cache.extend(events_by_month);
             model.calendar_name = Some(calendar_name);
-            model.loading = false;
             model.error_message = None;
             None
         }
         Message::EventsLoadFailed { error } => {
-            model.loading = false;
             model.error_message = Some(error);
             None
         }
@@ -171,11 +168,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 
 fn check_month_change(model: &Model) -> Option<Message> {
     let key = (model.current_year, model.current_month);
-    if !model.events_cache.contains_key(&key) {
-        Some(Message::RequestEvents { year: key.0, month: key.1 })
-    } else {
-        None
-    }
+    if !model.events_cache.contains_key(&key) { Some(Message::RequestEvents) } else { None }
 }
 
 #[cfg(test)]
@@ -183,7 +176,7 @@ mod tests {
     use super::*;
 
     fn default_model() -> Model {
-        Model::new("primary".to_string())
+        Model::new("primary".to_string(), koyomi_core::calendar::TimeZone::Jst)
     }
 
     #[test]
@@ -321,34 +314,30 @@ mod tests {
     #[test]
     fn events_loaded_updates_cache() {
         let mut model = default_model();
+        let mut events_by_month = std::collections::HashMap::new();
+        events_by_month.insert((2026, 2), vec![]);
+        events_by_month.insert((2026, 3), vec![]);
         update(
             &mut model,
-            Message::EventsLoaded {
-                year: 2026,
-                month: 2,
-                calendar_name: "Test Calendar".to_string(),
-                events: vec![],
-            },
+            Message::EventsLoaded { calendar_name: "Test Calendar".to_string(), events_by_month },
         );
         assert!(model.events_cache.contains_key(&(2026, 2)));
+        assert!(model.events_cache.contains_key(&(2026, 3)));
         assert_eq!(model.calendar_name, Some("Test Calendar".to_string()));
-        assert!(!model.loading);
     }
 
     #[test]
     fn events_load_failed_sets_error() {
         let mut model = default_model();
-        model.loading = true;
         update(&mut model, Message::EventsLoadFailed { error: "Network error".to_string() });
-        assert!(!model.loading);
         assert_eq!(model.error_message, Some("Network error".to_string()));
     }
 
     #[test]
-    fn request_events_sets_loading() {
+    fn request_events_clears_error_message() {
         let mut model = default_model();
-        update(&mut model, Message::RequestEvents { year: 2026, month: 2 });
-        assert!(model.loading);
+        model.error_message = Some("previous error".to_string());
+        update(&mut model, Message::RequestEvents);
         assert!(model.error_message.is_none());
     }
 
@@ -376,7 +365,7 @@ mod tests {
     fn check_month_change_returns_request_when_not_cached() {
         let model = default_model();
         let result = check_month_change(&model);
-        assert!(matches!(result, Some(Message::RequestEvents { .. })));
+        assert!(matches!(result, Some(Message::RequestEvents)));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use koyomi_core::calendar::Event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,15 +25,14 @@ pub struct Model {
     pub detail_modal_open: bool,
     pub detail_scroll_offset: u16,
 
-    pub loading: bool,
     pub error_message: Option<String>,
 
     pub should_quit: bool,
 }
 
 impl Model {
-    pub fn new(calendar_id: String) -> Self {
-        let today = Local::now().date_naive();
+    pub fn new(calendar_id: String, tz: koyomi_core::calendar::TimeZone) -> Self {
+        let today = tz.today();
         Self {
             current_year: today.year(),
             current_month: today.month(),
@@ -47,10 +46,13 @@ impl Model {
             event_list_index: 0,
             detail_modal_open: false,
             detail_scroll_offset: 0,
-            loading: false,
             error_message: None,
             should_quit: false,
         }
+    }
+
+    pub fn is_current_month_loading(&self) -> bool {
+        !self.events_cache.contains_key(&(self.current_year, self.current_month))
     }
 
     pub fn selected_date_events(&self) -> &[Event] {
@@ -63,12 +65,15 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use koyomi_core::calendar::TimeZone;
+
     use super::*;
 
     #[test]
     fn model_new_initializes_with_today() {
-        let model = Model::new("primary".to_string());
-        let today = Local::now().date_naive();
+        let tz = TimeZone::Jst;
+        let model = Model::new("primary".to_string(), tz);
+        let today = tz.today();
 
         assert_eq!(model.current_year, today.year());
         assert_eq!(model.current_month, today.month());
@@ -78,7 +83,6 @@ mod tests {
         assert_eq!(model.focus, Focus::Calendar);
         assert!(!model.sidebar_visible);
         assert!(!model.detail_modal_open);
-        assert!(!model.loading);
         assert!(!model.should_quit);
         assert!(model.events_cache.is_empty());
         assert!(model.calendar_name.is_none());
@@ -87,7 +91,30 @@ mod tests {
 
     #[test]
     fn selected_date_events_returns_empty_when_no_cache() {
-        let model = Model::new("primary".to_string());
+        let model = Model::new("primary".to_string(), TimeZone::Jst);
         assert!(model.selected_date_events().is_empty());
+    }
+
+    #[test]
+    fn is_current_month_loading_true_when_empty_cache() {
+        let model = Model::new("primary".to_string(), TimeZone::Jst);
+        assert!(model.is_current_month_loading());
+    }
+
+    #[test]
+    fn is_current_month_loading_false_when_cached() {
+        let mut model = Model::new("primary".to_string(), TimeZone::Jst);
+        model.events_cache.insert((model.current_year, model.current_month), vec![]);
+        assert!(!model.is_current_month_loading());
+    }
+
+    #[test]
+    fn is_current_month_loading_true_when_different_month_cached() {
+        let mut model = Model::new("primary".to_string(), TimeZone::Jst);
+        let other_month = if model.current_month == 12 { 1 } else { model.current_month + 1 };
+        let other_year =
+            if model.current_month == 12 { model.current_year + 1 } else { model.current_year };
+        model.events_cache.insert((other_year, other_month), vec![]);
+        assert!(model.is_current_month_loading());
     }
 }

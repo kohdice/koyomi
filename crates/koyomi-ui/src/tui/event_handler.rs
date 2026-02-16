@@ -84,7 +84,7 @@ mod tests {
     }
 
     fn default_model() -> Model {
-        Model::new("primary".to_string())
+        Model::new("primary".to_string(), koyomi_core::calendar::TimeZone::Jst)
     }
 
     #[test]

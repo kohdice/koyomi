@@ -31,6 +31,7 @@ pub async fn run(
     client: koyomi_core::Client,
     token: koyomi_core::StoredToken,
     calendar_id: String,
+    tz: koyomi_core::calendar::TimeZone,
 ) -> anyhow::Result<()> {
     install_panic_hook();
 
@@ -40,7 +41,7 @@ pub async fn run(
     let backend = CrosstermBackend::new(stdout());
     let terminal = Terminal::new(backend)?;
 
-    let result = App::new(terminal, client, token, calendar_id).run().await;
+    let result = App::new(terminal, client, token, calendar_id, tz).run().await;
 
     restore_terminal()?;
 

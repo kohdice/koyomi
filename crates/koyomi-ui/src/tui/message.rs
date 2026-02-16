@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use koyomi_core::calendar::Event;
 
 #[derive(Debug)]
@@ -21,8 +23,8 @@ pub enum Message {
     DetailScrollTop,
     DetailScrollBottom,
 
-    RequestEvents { year: i32, month: u32 },
-    EventsLoaded { year: i32, month: u32, calendar_name: String, events: Vec<Event> },
+    RequestEvents,
+    EventsLoaded { calendar_name: String, events_by_month: HashMap<(i32, u32), Vec<Event>> },
     EventsLoadFailed { error: String },
 
     Quit,

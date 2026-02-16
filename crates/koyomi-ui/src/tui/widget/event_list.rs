@@ -35,7 +35,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     let day_events = events_for_date(events, model.selected_date);
 
     if day_events.is_empty() {
-        let msg = if model.loading { "Loading..." } else { "No events" };
+        let msg = if model.is_current_month_loading() { "Loading..." } else { "No events" };
         let paragraph = Paragraph::new(Line::from(Span::styled(msg, theme::HELP_BAR)));
         f.render_widget(paragraph, inner);
         return;
