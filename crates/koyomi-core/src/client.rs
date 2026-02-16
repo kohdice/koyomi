@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::Result;
 use crate::auth::token::StoredToken;
@@ -60,14 +60,29 @@ impl Client {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
                 retries += 1;
                 if retries > MAX_RETRIES {
+                    warn!("HTTP {status} — giving up after {MAX_RETRIES} retries");
                     return Ok(response);
                 }
 
-                let retry_after = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok());
+                let retry_after =
+                    response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| {
+                        match v.to_str() {
+                            Ok(s) => match s.parse::<u64>() {
+                                Ok(n) => Some(n),
+                                Err(e) => {
+                                    debug!("Non-numeric Retry-After header '{s}': {e}");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                debug!("Non-ASCII Retry-After header: {e}");
+                                None
+                            }
+                        }
+                    });
+
+                // Consume the response body to allow HTTP/2 connection reuse
+                let _ = response.bytes().await;
 
                 let base_secs = 2u64.pow(retries - 1); // 1, 2, 4
                 let wait_secs = retry_after.map_or(base_secs, |ra| ra.max(base_secs));
