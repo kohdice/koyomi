@@ -4,7 +4,7 @@ use super::calendar_grid;
 use super::message::Message;
 use super::model::{Focus, Model};
 
-pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
+pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
     match msg {
         Message::Quit => {
             model.should_quit = true;
@@ -100,18 +100,14 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             model.detail_scroll_offset = model.detail_scroll_offset.saturating_add(1);
             None
         }
-        Message::DetailScrollTop => {
-            model.detail_scroll_offset = 0;
-            None
-        }
-        Message::DetailScrollBottom => {
-            model.detail_scroll_offset = u16::MAX;
-            None
-        }
 
         Message::RequestEvents => {
             model.error_message = None;
             None
+        }
+        Message::RefreshEvents => {
+            model.events_cache.remove(&(model.current_year, model.current_month));
+            Some(Message::RequestEvents)
         }
         Message::EventsLoaded { calendar_name, events_by_month } => {
             model.events_cache.extend(events_by_month);
@@ -403,5 +399,187 @@ mod tests {
         model.events_cache.insert((model.current_year, model.current_month), vec![]);
         let result = check_month_change(&model);
         assert!(result.is_none());
+    }
+
+    fn make_test_event(date: NaiveDate) -> koyomi_core::calendar::Event {
+        koyomi_core::calendar::Event {
+            id: None,
+            summary: Some("Test".to_string()),
+            status: None,
+            organizer: None,
+            location: None,
+            start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+            end: None,
+            description: None,
+            attendees: Vec::new(),
+            reminders: None,
+            conference_data: None,
+            html_link: None,
+        }
+    }
+
+    #[test]
+    fn event_list_down_advances_index() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![make_test_event(date), make_test_event(date), make_test_event(date)],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+
+        update(&mut model, Message::EventListDown);
+        assert_eq!(model.event_list_index, 1);
+        assert_eq!(model.detail_scroll_offset, 0);
+    }
+
+    #[test]
+    fn event_list_down_stops_at_last_index() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![make_test_event(date), make_test_event(date)],
+        );
+        model.event_list_index = 1;
+
+        update(&mut model, Message::EventListDown);
+        assert_eq!(model.event_list_index, 1);
+    }
+
+    #[test]
+    fn event_list_down_does_nothing_with_single_event() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_test_event(date)]);
+
+        update(&mut model, Message::EventListDown);
+        assert_eq!(model.event_list_index, 0);
+    }
+
+    #[test]
+    fn detail_scroll_down_increments() {
+        let mut model = default_model();
+        model.detail_scroll_offset = 0;
+
+        update(&mut model, Message::DetailScrollDown);
+        assert_eq!(model.detail_scroll_offset, 1);
+    }
+
+    #[test]
+    fn detail_scroll_up_decrements() {
+        let mut model = default_model();
+        model.detail_scroll_offset = 5;
+
+        update(&mut model, Message::DetailScrollUp);
+        assert_eq!(model.detail_scroll_offset, 4);
+    }
+
+    #[test]
+    fn detail_scroll_up_saturates_at_zero() {
+        let mut model = default_model();
+        model.detail_scroll_offset = 0;
+
+        update(&mut model, Message::DetailScrollUp);
+        assert_eq!(model.detail_scroll_offset, 0);
+    }
+
+    #[test]
+    fn advance_month_clamps_day_jan31_to_feb28() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        model.current_year = 2026;
+        model.current_month = 1;
+        model.events_cache.insert((2026, 1), vec![]);
+
+        update(&mut model, Message::NextMonth);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2026, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn advance_month_clamps_day_jan31_to_feb29_leap_year() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2028, 1, 31).unwrap();
+        model.current_year = 2028;
+        model.current_month = 1;
+        model.events_cache.insert((2028, 1), vec![]);
+
+        update(&mut model, Message::NextMonth);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2028, 2, 29).unwrap());
+    }
+
+    #[test]
+    fn advance_month_clamps_day_mar31_to_apr30() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        model.current_year = 2026;
+        model.current_month = 3;
+        model.events_cache.insert((2026, 3), vec![]);
+
+        update(&mut model, Message::NextMonth);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2026, 4, 30).unwrap());
+    }
+
+    #[test]
+    fn advance_month_preserves_day_when_valid() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        model.current_year = 2026;
+        model.current_month = 1;
+        model.events_cache.insert((2026, 1), vec![]);
+
+        update(&mut model, Message::NextMonth);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2026, 2, 15).unwrap());
+    }
+
+    #[test]
+    fn modal_toggle_focus_calendar_stays_calendar() {
+        let mut model = default_model();
+        model.focus = Focus::Calendar;
+
+        update(&mut model, Message::ModalToggleFocus);
+        assert_eq!(model.focus, Focus::Calendar);
+    }
+
+    #[test]
+    fn next_month_december_to_january_crosses_year() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2025, 12, 15).unwrap();
+        model.current_year = 2025;
+        model.current_month = 12;
+        model.events_cache.insert((2025, 12), vec![]);
+
+        update(&mut model, Message::NextMonth);
+        assert_eq!(model.current_year, 2026);
+        assert_eq!(model.current_month, 1);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+    }
+
+    #[test]
+    fn prev_month_january_to_december_crosses_year() {
+        let mut model = default_model();
+        model.selected_date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        model.current_year = 2026;
+        model.current_month = 1;
+        model.events_cache.insert((2026, 1), vec![]);
+
+        update(&mut model, Message::PrevMonth);
+        assert_eq!(model.current_year, 2025);
+        assert_eq!(model.current_month, 12);
+        assert_eq!(model.selected_date, NaiveDate::from_ymd_opt(2025, 12, 15).unwrap());
+    }
+
+    #[test]
+    fn refresh_events_removes_cache_and_returns_request() {
+        let mut model = default_model();
+        model.events_cache.insert((model.current_year, model.current_month), vec![]);
+        assert!(!model.is_current_month_loading());
+
+        let result = update(&mut model, Message::RefreshEvents);
+        assert!(model.is_current_month_loading());
+        assert!(matches!(result, Some(Message::RequestEvents)));
     }
 }

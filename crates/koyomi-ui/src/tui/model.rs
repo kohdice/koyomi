@@ -4,35 +4,35 @@ use chrono::{Datelike, NaiveDate};
 use koyomi_core::calendar::Event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
+pub(super) enum Focus {
     Calendar,
     EventList,
     EventDetail,
 }
 
-pub struct Model {
-    pub current_year: i32,
-    pub current_month: u32,
-    pub selected_date: NaiveDate,
-    pub today: NaiveDate,
-    pub tz: koyomi_core::calendar::TimeZone,
+pub(super) struct Model {
+    pub(super) current_year: i32,
+    pub(super) current_month: u32,
+    pub(super) selected_date: NaiveDate,
+    pub(super) today: NaiveDate,
+    pub(super) tz: koyomi_core::calendar::TimeZone,
 
-    pub events_cache: HashMap<(i32, u32), Vec<Event>>,
-    pub calendar_name: Option<String>,
-    pub calendar_id: String,
+    pub(super) events_cache: HashMap<(i32, u32), Vec<Event>>,
+    pub(super) calendar_name: Option<String>,
+    pub(super) calendar_id: String,
 
-    pub focus: Focus,
-    pub event_modal_open: bool,
-    pub event_list_index: usize,
-    pub detail_scroll_offset: u16,
+    pub(super) focus: Focus,
+    pub(super) event_modal_open: bool,
+    pub(super) event_list_index: usize,
+    pub(super) detail_scroll_offset: u16,
 
-    pub error_message: Option<String>,
+    pub(super) error_message: Option<String>,
 
-    pub should_quit: bool,
+    pub(super) should_quit: bool,
 }
 
 impl Model {
-    pub fn new(calendar_id: String, tz: koyomi_core::calendar::TimeZone) -> Self {
+    pub(super) fn new(calendar_id: String, tz: koyomi_core::calendar::TimeZone) -> Self {
         let today = tz.today();
         Self {
             current_year: today.year(),
@@ -52,11 +52,11 @@ impl Model {
         }
     }
 
-    pub fn is_current_month_loading(&self) -> bool {
+    pub(super) fn is_current_month_loading(&self) -> bool {
         !self.events_cache.contains_key(&(self.current_year, self.current_month))
     }
 
-    pub fn current_month_events(&self) -> &[Event] {
+    pub(super) fn current_month_events(&self) -> &[Event] {
         self.events_cache
             .get(&(self.current_year, self.current_month))
             .map(Vec::as_slice)

@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::message::Message;
 use super::model::{Focus, Model};
 
-pub fn handle_key_event(model: &Model, key: KeyEvent) -> Option<Message> {
+pub(super) fn handle_key_event(model: &Model, key: KeyEvent) -> Option<Message> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Some(Message::Quit);
     }
@@ -25,6 +25,7 @@ fn handle_calendar_key(key: KeyEvent) -> Option<Message> {
         KeyCode::Char('n') => Some(Message::NextMonth),
         KeyCode::Char('p') => Some(Message::PrevMonth),
         KeyCode::Char('t') => Some(Message::GoToToday),
+        KeyCode::Char('r') => Some(Message::RefreshEvents),
         KeyCode::Enter => Some(Message::OpenEventModal),
         _ => None,
     }
@@ -54,8 +55,6 @@ fn handle_modal_detail_key(key: KeyEvent) -> Option<Message> {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Some(Message::DetailScrollDown),
         KeyCode::Char('k') | KeyCode::Up => Some(Message::DetailScrollUp),
-        KeyCode::Char('g') => Some(Message::DetailScrollTop),
-        KeyCode::Char('G') => Some(Message::DetailScrollBottom),
         _ => None,
     }
 }
@@ -193,13 +192,21 @@ mod tests {
             handle_key_event(&model, make_key(KeyCode::Char('k'))),
             Some(Message::DetailScrollUp)
         ));
-        assert!(matches!(
-            handle_key_event(&model, make_key(KeyCode::Char('g'))),
-            Some(Message::DetailScrollTop)
-        ));
-        assert!(matches!(
-            handle_key_event(&model, make_key(KeyCode::Char('G'))),
-            Some(Message::DetailScrollBottom)
-        ));
+    }
+
+    #[test]
+    fn r_refreshes_events_in_calendar_mode() {
+        let model = default_model();
+        let msg = handle_key_event(&model, make_key(KeyCode::Char('r')));
+        assert!(matches!(msg, Some(Message::RefreshEvents)));
+    }
+
+    #[test]
+    fn r_does_nothing_in_modal() {
+        let mut model = default_model();
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        let msg = handle_key_event(&model, make_key(KeyCode::Char('r')));
+        assert!(msg.is_none());
     }
 }

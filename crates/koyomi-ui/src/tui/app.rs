@@ -21,17 +21,16 @@ const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 /// Number of months to fetch in a single API request (center month +/- 6 = 13)
 const PREFETCH_MONTHS: u32 = 13;
 
-pub struct App {
+pub(super) struct App {
     model: Model,
     terminal: Terminal<CrosstermBackend<Stdout>>,
     client: koyomi_core::Client,
     token: koyomi_core::StoredToken,
-    tz: koyomi_core::calendar::TimeZone,
     fetch_in_progress: bool,
 }
 
 impl App {
-    pub fn new(
+    pub(super) fn new(
         terminal: Terminal<CrosstermBackend<Stdout>>,
         client: koyomi_core::Client,
         token: koyomi_core::StoredToken,
@@ -43,15 +42,15 @@ impl App {
             terminal,
             client,
             token,
-            tz,
             fetch_in_progress: false,
         }
     }
 
-    pub async fn run(mut self) -> anyhow::Result<()> {
+    pub(super) async fn run(mut self) -> anyhow::Result<()> {
         let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
         let (key_tx, mut key_rx) = mpsc::unbounded_channel::<KeyEvent>();
 
+        let err_tx = msg_tx.clone();
         tokio::task::spawn_blocking(move || {
             loop {
                 match event::poll(EVENT_POLL_TIMEOUT) {
@@ -64,6 +63,9 @@ impl App {
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(e) => {
                             tracing::warn!("Terminal event read error: {e}");
+                            let _ = err_tx.send(Message::EventsLoadFailed {
+                                error: format!("Terminal read error: {e}"),
+                            });
                             break;
                         }
                         _ => {}
@@ -76,6 +78,9 @@ impl App {
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => {
                         tracing::warn!("Terminal event poll error: {e}");
+                        let _ = err_tx.send(Message::EventsLoadFailed {
+                            error: format!("Terminal poll error: {e}"),
+                        });
                         break;
                     }
                 }
@@ -139,7 +144,7 @@ impl App {
         let client = self.client.clone();
         let token = self.token.clone();
         let calendar_id = self.model.calendar_id.clone();
-        let tz = self.tz;
+        let tz = self.model.tz;
         let (start_year, start_month) = prefetch_range(center_year, center_month);
 
         debug!(
@@ -381,5 +386,30 @@ mod tests {
 
         let map = distribute_events(vec![event], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
         assert_eq!(map.get(&(2026, 1)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn distribute_events_drops_event_with_no_start() {
+        use koyomi_core::calendar::Event;
+
+        let event = Event {
+            id: None,
+            summary: Some("No start".to_string()),
+            status: None,
+            organizer: None,
+            location: None,
+            start: None,
+            end: None,
+            description: None,
+            attendees: Vec::new(),
+            reminders: None,
+            conference_data: None,
+            html_link: None,
+        };
+
+        let map = distribute_events(vec![event], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
+        for events in map.values() {
+            assert!(events.is_empty());
+        }
     }
 }
