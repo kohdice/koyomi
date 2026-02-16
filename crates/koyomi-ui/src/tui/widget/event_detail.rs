@@ -1,23 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::tui::calendar_grid::{self, events_for_date};
-use crate::tui::model::Model;
+use crate::tui::model::{Focus, Model};
 use crate::tui::theme;
 
-pub fn render(f: &mut Frame, model: &Model) {
-    let area = f.area();
-
-    let modal_width = (area.width as f32 * 0.6).max(40.0).min(area.width as f32) as u16;
-    let modal_height = (area.height as f32 * 0.7).max(10.0).min(area.height as f32) as u16;
-
-    let x = (area.width.saturating_sub(modal_width)) / 2;
-    let y = (area.height.saturating_sub(modal_height)) / 2;
-    let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-    f.render_widget(Clear, modal_area);
+pub fn render(f: &mut Frame, area: Rect, model: &Model) {
+    let border_style = if model.focus == Focus::EventDetail {
+        theme::FOCUSED_BORDER
+    } else {
+        theme::UNFOCUSED_BORDER
+    };
 
     let events = model
         .events_cache
@@ -28,13 +23,11 @@ pub fn render(f: &mut Frame, model: &Model) {
     let day_events = events_for_date(events, model.selected_date);
 
     let Some(event) = day_events.get(model.event_list_index) else {
-        let block = Block::default()
-            .title(" Event Detail ")
-            .borders(Borders::ALL)
-            .border_style(theme::MODAL_BORDER);
+        let block =
+            Block::default().title(" Detail ").borders(Borders::ALL).border_style(border_style);
         let paragraph = Paragraph::new("No event selected.");
-        f.render_widget(block, modal_area);
-        f.render_widget(paragraph, modal_area);
+        f.render_widget(block, area);
+        f.render_widget(paragraph, area);
         return;
     };
 
@@ -42,12 +35,12 @@ pub fn render(f: &mut Frame, model: &Model) {
     let block = Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
-        .border_style(theme::MODAL_BORDER);
+        .border_style(border_style);
 
-    let inner = block.inner(modal_area);
-    f.render_widget(block, modal_area);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let lines = build_detail_lines(event, inner.width as usize);
+    let lines = build_detail_lines(event);
 
     let paragraph =
         Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((model.detail_scroll_offset, 0));
@@ -55,7 +48,7 @@ pub fn render(f: &mut Frame, model: &Model) {
     f.render_widget(paragraph, inner);
 }
 
-fn build_detail_lines(event: &koyomi_core::calendar::Event, _width: usize) -> Vec<Line<'static>> {
+fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     if let (Some(_start), Some(end)) = (&event.start, &event.end) {
@@ -126,12 +119,6 @@ fn build_detail_lines(event: &koyomi_core::calendar::Event, _width: usize) -> Ve
             Span::raw(link.clone()),
         ]));
     }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "j/k scroll | g/G top/bottom | Enter/Esc close",
-        theme::HELP_BAR,
-    )));
 
     lines
 }

@@ -39,7 +39,6 @@ pub const SELECTED_EVENT_INDICATOR: Style = Style::new().fg(CYAN);
 // Borders
 pub const FOCUSED_BORDER: Style = Style::new().fg(BLUE);
 pub const UNFOCUSED_BORDER: Style = Style::new().fg(BASE01);
-pub const MODAL_BORDER: Style = Style::new().fg(BLUE);
 
 // Help bar
 pub const HELP_BAR: Style = Style::new().fg(BASE01);

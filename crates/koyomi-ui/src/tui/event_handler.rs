@@ -8,32 +8,16 @@ pub fn handle_key_event(model: &Model, key: KeyEvent) -> Option<Message> {
         return Some(Message::Quit);
     }
 
-    if model.detail_modal_open {
-        return handle_detail_modal_key(key);
+    if model.event_modal_open {
+        return handle_event_modal_key(model, key);
     }
 
+    handle_calendar_key(key)
+}
+
+fn handle_calendar_key(key: KeyEvent) -> Option<Message> {
     match key.code {
         KeyCode::Char('q') => Some(Message::Quit),
-        _ => match model.focus {
-            Focus::Calendar => handle_calendar_key(model, key),
-            Focus::EventList => handle_event_list_key(key),
-        },
-    }
-}
-
-fn handle_detail_modal_key(key: KeyEvent) -> Option<Message> {
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => Some(Message::DetailScrollDown),
-        KeyCode::Char('k') | KeyCode::Up => Some(Message::DetailScrollUp),
-        KeyCode::Char('g') => Some(Message::DetailScrollTop),
-        KeyCode::Char('G') => Some(Message::DetailScrollBottom),
-        KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => Some(Message::CloseDetail),
-        _ => None,
-    }
-}
-
-fn handle_calendar_key(model: &Model, key: KeyEvent) -> Option<Message> {
-    match key.code {
         KeyCode::Char('h') | KeyCode::Left => Some(Message::MoveLeft),
         KeyCode::Char('j') | KeyCode::Down => Some(Message::MoveDown),
         KeyCode::Char('k') | KeyCode::Up => Some(Message::MoveUp),
@@ -41,32 +25,37 @@ fn handle_calendar_key(model: &Model, key: KeyEvent) -> Option<Message> {
         KeyCode::Char('n') => Some(Message::NextMonth),
         KeyCode::Char('p') => Some(Message::PrevMonth),
         KeyCode::Char('t') => Some(Message::GoToToday),
-        KeyCode::Char('e') => Some(Message::ToggleSidebar),
-        KeyCode::Enter => {
-            if model.sidebar_visible {
-                Some(Message::ToggleFocus)
-            } else {
-                Some(Message::ToggleSidebar)
-            }
-        }
-        KeyCode::Tab => {
-            if model.sidebar_visible {
-                Some(Message::ToggleFocus)
-            } else {
-                None
-            }
-        }
+        KeyCode::Enter => Some(Message::OpenEventModal),
         _ => None,
     }
 }
 
-fn handle_event_list_key(key: KeyEvent) -> Option<Message> {
+fn handle_event_modal_key(model: &Model, key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Some(Message::CloseEventModal),
+        KeyCode::Tab => Some(Message::ModalToggleFocus),
+        _ => match model.focus {
+            Focus::EventList => handle_modal_event_list_key(key),
+            Focus::EventDetail => handle_modal_detail_key(key),
+            Focus::Calendar => None,
+        },
+    }
+}
+
+fn handle_modal_event_list_key(key: KeyEvent) -> Option<Message> {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Some(Message::EventListDown),
         KeyCode::Char('k') | KeyCode::Up => Some(Message::EventListUp),
-        KeyCode::Enter => Some(Message::OpenDetail),
-        KeyCode::Char('e') => Some(Message::ToggleSidebar),
-        KeyCode::Tab | KeyCode::Esc => Some(Message::ToggleFocus),
+        _ => None,
+    }
+}
+
+fn handle_modal_detail_key(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Some(Message::DetailScrollDown),
+        KeyCode::Char('k') | KeyCode::Up => Some(Message::DetailScrollUp),
+        KeyCode::Char('g') => Some(Message::DetailScrollTop),
+        KeyCode::Char('G') => Some(Message::DetailScrollBottom),
         _ => None,
     }
 }
@@ -143,23 +132,41 @@ mod tests {
     }
 
     #[test]
-    fn tab_does_nothing_when_sidebar_hidden() {
+    fn enter_opens_event_modal() {
         let model = default_model();
-        let msg = handle_key_event(&model, make_key(KeyCode::Tab));
-        assert!(msg.is_none());
+        let msg = handle_key_event(&model, make_key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::OpenEventModal)));
     }
 
     #[test]
-    fn tab_toggles_focus_when_sidebar_visible() {
+    fn modal_tab_toggles_focus() {
         let mut model = default_model();
-        model.sidebar_visible = true;
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
         let msg = handle_key_event(&model, make_key(KeyCode::Tab));
-        assert!(matches!(msg, Some(Message::ToggleFocus)));
+        assert!(matches!(msg, Some(Message::ModalToggleFocus)));
     }
 
     #[test]
-    fn event_list_jk_navigates() {
+    fn modal_esc_closes() {
         let mut model = default_model();
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+
+        assert!(matches!(
+            handle_key_event(&model, make_key(KeyCode::Esc)),
+            Some(Message::CloseEventModal)
+        ));
+        assert!(matches!(
+            handle_key_event(&model, make_key(KeyCode::Char('q'))),
+            Some(Message::CloseEventModal)
+        ));
+    }
+
+    #[test]
+    fn modal_event_list_jk_navigates() {
+        let mut model = default_model();
+        model.event_modal_open = true;
         model.focus = Focus::EventList;
 
         assert!(matches!(
@@ -173,17 +180,10 @@ mod tests {
     }
 
     #[test]
-    fn event_list_enter_opens_detail() {
+    fn modal_detail_scroll_keys() {
         let mut model = default_model();
-        model.focus = Focus::EventList;
-        let msg = handle_key_event(&model, make_key(KeyCode::Enter));
-        assert!(matches!(msg, Some(Message::OpenDetail)));
-    }
-
-    #[test]
-    fn detail_modal_scroll_keys() {
-        let mut model = default_model();
-        model.detail_modal_open = true;
+        model.event_modal_open = true;
+        model.focus = Focus::EventDetail;
 
         assert!(matches!(
             handle_key_event(&model, make_key(KeyCode::Char('j'))),
@@ -200,25 +200,6 @@ mod tests {
         assert!(matches!(
             handle_key_event(&model, make_key(KeyCode::Char('G'))),
             Some(Message::DetailScrollBottom)
-        ));
-    }
-
-    #[test]
-    fn detail_modal_close_keys() {
-        let mut model = default_model();
-        model.detail_modal_open = true;
-
-        assert!(matches!(
-            handle_key_event(&model, make_key(KeyCode::Enter)),
-            Some(Message::CloseDetail)
-        ));
-        assert!(matches!(
-            handle_key_event(&model, make_key(KeyCode::Esc)),
-            Some(Message::CloseDetail)
-        ));
-        assert!(matches!(
-            handle_key_event(&model, make_key(KeyCode::Char('q'))),
-            Some(Message::CloseDetail)
         ));
     }
 }

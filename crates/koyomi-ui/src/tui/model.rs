@@ -7,6 +7,7 @@ use koyomi_core::calendar::Event;
 pub enum Focus {
     Calendar,
     EventList,
+    EventDetail,
 }
 
 pub struct Model {
@@ -20,9 +21,8 @@ pub struct Model {
     pub calendar_id: String,
 
     pub focus: Focus,
-    pub sidebar_visible: bool,
+    pub event_modal_open: bool,
     pub event_list_index: usize,
-    pub detail_modal_open: bool,
     pub detail_scroll_offset: u16,
 
     pub error_message: Option<String>,
@@ -42,9 +42,8 @@ impl Model {
             calendar_name: None,
             calendar_id,
             focus: Focus::Calendar,
-            sidebar_visible: false,
+            event_modal_open: false,
             event_list_index: 0,
-            detail_modal_open: false,
             detail_scroll_offset: 0,
             error_message: None,
             should_quit: false,
@@ -81,8 +80,7 @@ mod tests {
         assert_eq!(model.today, today);
         assert_eq!(model.calendar_id, "primary");
         assert_eq!(model.focus, Focus::Calendar);
-        assert!(!model.sidebar_visible);
-        assert!(!model.detail_modal_open);
+        assert!(!model.event_modal_open);
         assert!(!model.should_quit);
         assert!(model.events_cache.is_empty());
         assert!(model.calendar_name.is_none());

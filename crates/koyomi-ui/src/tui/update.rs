@@ -43,26 +43,36 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             check_month_change(model)
         }
 
-        Message::ToggleSidebar => {
-            model.sidebar_visible = !model.sidebar_visible;
-            if !model.sidebar_visible {
-                model.focus = Focus::Calendar;
+        Message::OpenEventModal => {
+            let events =
+                calendar_grid::events_for_date(model.selected_date_events(), model.selected_date);
+            if !events.is_empty() {
+                model.event_modal_open = true;
+                model.focus = Focus::EventList;
+                model.event_list_index = 0;
+                model.detail_scroll_offset = 0;
             }
             None
         }
-        Message::ToggleFocus => {
-            if model.sidebar_visible {
-                model.focus = match model.focus {
-                    Focus::Calendar => Focus::EventList,
-                    Focus::EventList => Focus::Calendar,
-                };
-                model.event_list_index = 0;
-            }
+        Message::CloseEventModal => {
+            model.event_modal_open = false;
+            model.focus = Focus::Calendar;
+            model.event_list_index = 0;
+            model.detail_scroll_offset = 0;
+            None
+        }
+        Message::ModalToggleFocus => {
+            model.focus = match model.focus {
+                Focus::EventList => Focus::EventDetail,
+                Focus::EventDetail => Focus::EventList,
+                Focus::Calendar => Focus::Calendar,
+            };
             None
         }
         Message::EventListUp => {
             if model.event_list_index > 0 {
                 model.event_list_index -= 1;
+                model.detail_scroll_offset = 0;
             }
             None
         }
@@ -72,21 +82,8 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             let max_index = events.len().saturating_sub(1);
             if model.event_list_index < max_index {
                 model.event_list_index += 1;
-            }
-            None
-        }
-        Message::OpenDetail => {
-            let events =
-                calendar_grid::events_for_date(model.selected_date_events(), model.selected_date);
-            if !events.is_empty() {
-                model.detail_modal_open = true;
                 model.detail_scroll_offset = 0;
             }
-            None
-        }
-        Message::CloseDetail => {
-            model.detail_modal_open = false;
-            model.detail_scroll_offset = 0;
             None
         }
         Message::DetailScrollUp => {
@@ -269,46 +266,71 @@ mod tests {
     }
 
     #[test]
-    fn toggle_sidebar_flips_visibility() {
+    fn open_event_modal_sets_state() {
         let mut model = default_model();
-        assert!(!model.sidebar_visible);
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: None,
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date {
+                    date: date.format("%Y-%m-%d").to_string(),
+                }),
+                end: None,
+                description: None,
+                attendees: Vec::new(),
+                reminders: None,
+                conference_data: None,
+                html_link: None,
+            }],
+        );
 
-        update(&mut model, Message::ToggleSidebar);
-        assert!(model.sidebar_visible);
-
-        update(&mut model, Message::ToggleSidebar);
-        assert!(!model.sidebar_visible);
+        update(&mut model, Message::OpenEventModal);
+        assert!(model.event_modal_open);
+        assert_eq!(model.focus, Focus::EventList);
+        assert_eq!(model.event_list_index, 0);
+        assert_eq!(model.detail_scroll_offset, 0);
     }
 
     #[test]
-    fn toggle_sidebar_off_resets_focus_to_calendar() {
+    fn open_event_modal_does_nothing_without_events() {
         let mut model = default_model();
-        model.sidebar_visible = true;
+        model.events_cache.insert((model.current_year, model.current_month), vec![]);
+
+        update(&mut model, Message::OpenEventModal);
+        assert!(!model.event_modal_open);
+        assert_eq!(model.focus, Focus::Calendar);
+    }
+
+    #[test]
+    fn close_event_modal_resets_state() {
+        let mut model = default_model();
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        model.event_list_index = 3;
+        model.detail_scroll_offset = 10;
+
+        update(&mut model, Message::CloseEventModal);
+        assert!(!model.event_modal_open);
+        assert_eq!(model.focus, Focus::Calendar);
+        assert_eq!(model.event_list_index, 0);
+        assert_eq!(model.detail_scroll_offset, 0);
+    }
+
+    #[test]
+    fn modal_toggle_focus_switches_between_list_and_detail() {
+        let mut model = default_model();
         model.focus = Focus::EventList;
 
-        update(&mut model, Message::ToggleSidebar);
-        assert_eq!(model.focus, Focus::Calendar);
-    }
+        update(&mut model, Message::ModalToggleFocus);
+        assert_eq!(model.focus, Focus::EventDetail);
 
-    #[test]
-    fn toggle_focus_switches_between_calendar_and_event_list() {
-        let mut model = default_model();
-        model.sidebar_visible = true;
-
-        update(&mut model, Message::ToggleFocus);
+        update(&mut model, Message::ModalToggleFocus);
         assert_eq!(model.focus, Focus::EventList);
-
-        update(&mut model, Message::ToggleFocus);
-        assert_eq!(model.focus, Focus::Calendar);
-    }
-
-    #[test]
-    fn toggle_focus_does_nothing_when_sidebar_hidden() {
-        let mut model = default_model();
-        assert!(!model.sidebar_visible);
-
-        update(&mut model, Message::ToggleFocus);
-        assert_eq!(model.focus, Focus::Calendar);
     }
 
     #[test]
@@ -342,13 +364,13 @@ mod tests {
     }
 
     #[test]
-    fn close_detail_resets_state() {
+    fn event_list_up_resets_scroll_offset() {
         let mut model = default_model();
-        model.detail_modal_open = true;
-        model.detail_scroll_offset = 10;
+        model.event_list_index = 1;
+        model.detail_scroll_offset = 5;
 
-        update(&mut model, Message::CloseDetail);
-        assert!(!model.detail_modal_open);
+        update(&mut model, Message::EventListUp);
+        assert_eq!(model.event_list_index, 0);
         assert_eq!(model.detail_scroll_offset, 0);
     }
 
