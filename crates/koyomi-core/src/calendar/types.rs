@@ -124,6 +124,17 @@ pub enum ReminderMethod {
     Unknown,
 }
 
+impl ReminderMethod {
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReminderMethod::Email => "email",
+            ReminderMethod::Popup => "popup",
+            ReminderMethod::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderOverride {
     pub method: ReminderMethod,

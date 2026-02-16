@@ -94,7 +94,6 @@ impl Client {
         token: &StoredToken,
         config: &ListEventsConfig,
     ) -> Result<CalendarEvents> {
-        calendar::list_events(self, token.access_token(), config, calendar::CALENDAR_API_BASE_URL)
-            .await
+        calendar::list_events(self, token.access_token(), config, calendar::API_BASE_URL).await
     }
 }
