@@ -43,15 +43,21 @@ pub async fn run() -> Result<()> {
     init_tracing(cli.verbose)?;
 
     match cli.command {
-        Commands::Login => {
+        None => {
+            let client = koyomi_core::Client::new()?;
+            let token = koyomi_core::get_valid_token(&client).await?;
+            koyomi_ui::tui::run(client, token, cli.calendar).await?;
+            Ok(())
+        }
+        Some(Commands::Login) => {
             let client = koyomi_core::Client::new()?;
             handle_login(&client, cli.quiet).await
         }
-        Commands::Logout => {
+        Some(Commands::Logout) => {
             let client = koyomi_core::Client::new()?;
             handle_logout(&client, cli.quiet).await
         }
-        Commands::Events { period, calendar, details, limit } => {
+        Some(Commands::Events { period, calendar, details, limit }) => {
             let client = koyomi_core::Client::new()?;
             handle_events(&client, period, calendar, details, limit).await
         }
