@@ -50,6 +50,12 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         if !xdg.is_empty() && path.is_absolute() {
             return Ok(path.join(CONFIG_DIR));
         }
+        if !xdg.is_empty() && !path.is_absolute() {
+            eprintln!(
+                "koyomi: warning: XDG_DATA_HOME is set to a relative path '{}'; using default",
+                xdg
+            );
+        }
     }
 
     Ok(home_dir()?.join(".local/share").join(CONFIG_DIR))
