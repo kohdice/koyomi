@@ -41,6 +41,8 @@ struct SimplifiedEvent {
     end: Option<String>,
     description: Option<String>,
     attendees: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reminders: Vec<String>,
     conference_data: Option<SimplifiedConference>,
     html_link: Option<String>,
 }
@@ -80,6 +82,21 @@ impl From<&Event> for SimplifiedEvent {
                 .filter(|a| !a.resource)
                 .filter_map(|a| a.display_name.clone().or_else(|| a.email.clone()))
                 .collect(),
+            reminders: event
+                .reminders
+                .as_ref()
+                .map(|r| {
+                    let mut items: Vec<String> = r
+                        .overrides
+                        .iter()
+                        .map(|o| format!("{}: {} minutes", o.method.as_str(), o.minutes))
+                        .collect();
+                    if r.use_default && items.is_empty() {
+                        items.push("calendar default".to_string());
+                    }
+                    items
+                })
+                .unwrap_or_default(),
             conference_data: event.conference_data.as_ref().and_then(|cd| {
                 cd.conference_solution.as_ref().map(|cs| SimplifiedConference {
                     name: cs.name.clone(),
