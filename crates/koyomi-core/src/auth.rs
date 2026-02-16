@@ -106,11 +106,7 @@ pub async fn complete_login(
     .await?;
 
     if token_response.refresh_token.is_none() {
-        return Err(Error::Auth(
-            "Authorization server did not return a refresh token. \
-             Please revoke app access at https://myaccount.google.com/permissions and try again."
-                .into(),
-        ));
+        return Err(Error::AuthNoRefreshToken);
     }
 
     let stored_token = token::StoredToken::from_response(
@@ -186,25 +182,25 @@ pub async fn logout(client: &crate::client::Client) -> Result<LogoutResult> {
     let token_path = token::path()?;
     match token::load(&token_path) {
         Ok(stored_token) => {
-            if let Some(refresh_token) = stored_token.refresh_token() {
-                match client.http().post(REVOKE_URL).form(&[("token", refresh_token)]).send().await
-                {
-                    Ok(response) if response.status().is_success() => {
-                        debug!("Token revoked successfully with Google");
-                    }
-                    Ok(response) => {
-                        warn!(
-                            "Token revocation returned HTTP {}: token may still be valid on Google's side",
-                            response.status()
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to revoke token with Google (network error: {}): \
-                             token may still be valid on Google's side",
-                            e
-                        );
-                    }
+            let revoke_token =
+                stored_token.refresh_token().unwrap_or_else(|| stored_token.access_token());
+
+            match client.http().post(REVOKE_URL).form(&[("token", revoke_token)]).send().await {
+                Ok(response) if response.status().is_success() => {
+                    debug!("Token revoked successfully with Google");
+                }
+                Ok(response) => {
+                    warn!(
+                        "Token revocation returned HTTP {}: token may still be valid on Google's side",
+                        response.status()
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to revoke token with Google (network error: {}): \
+                         token may still be valid on Google's side",
+                        e
+                    );
                 }
             }
 
