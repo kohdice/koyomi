@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use super::model::Model;
 use super::widget;
 
-pub fn view(model: &Model, f: &mut Frame) {
+pub fn view(model: &mut Model, f: &mut Frame) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])

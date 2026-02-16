@@ -78,7 +78,7 @@ impl App {
         self.handle_message_chain(initial_msg, &msg_tx);
 
         loop {
-            self.terminal.draw(|f| view(&self.model, f))?;
+            self.terminal.draw(|f| view(&mut self.model, f))?;
 
             if self.model.should_quit {
                 break;

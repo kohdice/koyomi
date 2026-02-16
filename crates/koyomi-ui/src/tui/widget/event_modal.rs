@@ -9,7 +9,7 @@ use crate::tui::widget;
 
 const HORIZONTAL_LAYOUT_MIN_WIDTH: u16 = 120;
 
-pub fn render(f: &mut Frame, model: &Model) {
+pub fn render(f: &mut Frame, model: &mut Model) {
     let area = f.area();
 
     let modal_width = (area.width as f32 * 0.8).max(40.0).min(area.width as f32) as u16;

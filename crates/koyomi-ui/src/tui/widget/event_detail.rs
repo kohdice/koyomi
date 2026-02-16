@@ -7,7 +7,7 @@ use crate::tui::calendar_grid::{self, events_for_date};
 use crate::tui::model::{Focus, Model};
 use crate::tui::theme;
 
-pub fn render(f: &mut Frame, area: Rect, model: &Model) {
+pub fn render(f: &mut Frame, area: Rect, model: &mut Model) {
     let border_style = if model.focus == Focus::EventDetail {
         theme::FOCUSED_BORDER
     } else {
@@ -42,9 +42,13 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
 
     let lines = build_detail_lines(event);
 
-    let paragraph =
-        Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((model.detail_scroll_offset, 0));
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 
+    let content_height = paragraph.line_count(inner.width);
+    let max_scroll = content_height.saturating_sub(inner.height as usize) as u16;
+    model.detail_scroll_offset = model.detail_scroll_offset.min(max_scroll);
+
+    let paragraph = paragraph.scroll((model.detail_scroll_offset, 0));
     f.render_widget(paragraph, inner);
 }
 
