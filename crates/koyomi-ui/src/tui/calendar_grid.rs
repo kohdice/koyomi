@@ -231,4 +231,35 @@ mod tests {
         let event = test_event(None, None);
         assert_eq!(format_event_time_compact(&event, TimeZone::Jst), "");
     }
+
+    #[test]
+    fn format_event_time_timed_event() {
+        use koyomi_core::calendar::TimeZone;
+        let event = test_event(
+            Some(EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T09:30:00+09:00")
+                    .unwrap(),
+                time_zone: Some("Asia/Tokyo".to_string()),
+            }),
+            Some("Meeting"),
+        );
+        assert_eq!(format_event_time(&event, TimeZone::Jst), "09:30");
+    }
+
+    #[test]
+    fn format_event_time_all_day_event() {
+        use koyomi_core::calendar::TimeZone;
+        let event = test_event(
+            Some(EventDateTime::Date { date: NaiveDate::from_ymd_opt(2026, 2, 16).unwrap() }),
+            Some("Holiday"),
+        );
+        assert_eq!(format_event_time(&event, TimeZone::Jst), "All day");
+    }
+
+    #[test]
+    fn format_event_time_no_start() {
+        use koyomi_core::calendar::TimeZone;
+        let event = test_event(None, None);
+        assert_eq!(format_event_time(&event, TimeZone::Jst), "");
+    }
 }
