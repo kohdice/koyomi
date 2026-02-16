@@ -58,16 +58,30 @@ fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>
     if let (Some(_start), Some(end)) = (&event.start, &event.end) {
         let start_str = calendar_grid::format_event_time(event);
         let end_str = end.to_display_string().to_string();
+        lines.push(Line::from(Span::styled("Time:", theme::DETAIL_LABEL)));
+        lines.push(Line::from(format!("  • {start_str} — {end_str}")));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(status) = &event.status {
+        let style = match status {
+            koyomi_core::calendar::EventStatus::Confirmed => theme::STATUS_CONFIRMED,
+            koyomi_core::calendar::EventStatus::Tentative => theme::STATUS_TENTATIVE,
+            koyomi_core::calendar::EventStatus::Cancelled => theme::STATUS_CANCELLED,
+            koyomi_core::calendar::EventStatus::Unknown => theme::STATUS_UNKNOWN,
+        };
+        lines.push(Line::from(Span::styled("Status:", theme::DETAIL_LABEL)));
         lines.push(Line::from(vec![
-            Span::styled("Time: ", theme::DETAIL_LABEL),
-            Span::raw(format!("{start_str} — {end_str}")),
+            Span::raw("  • "),
+            Span::styled(status.as_str().to_string(), style),
         ]));
         lines.push(Line::from(""));
     }
 
     if let Some(location) = &event.location {
+        lines.push(Line::from(Span::styled("Location:", theme::DETAIL_LABEL)));
         lines.push(Line::from(vec![
-            Span::styled("Location: ", theme::DETAIL_LABEL),
+            Span::raw("  • "),
             Span::styled(location.clone(), theme::EVENT_LOCATION),
         ]));
         lines.push(Line::from(""));
@@ -76,7 +90,7 @@ fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>
     if let Some(description) = &event.description {
         lines.push(Line::from(Span::styled("Description:", theme::DETAIL_LABEL)));
         for line in description.lines() {
-            lines.push(Line::from(line.to_string()));
+            lines.push(Line::from(format!("  {line}")));
         }
         lines.push(Line::from(""));
     }
@@ -84,10 +98,8 @@ fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>
     if let Some(organizer) = &event.organizer {
         let name =
             organizer.display_name.as_deref().or(organizer.email.as_deref()).unwrap_or("Unknown");
-        lines.push(Line::from(vec![
-            Span::styled("Organizer: ", theme::DETAIL_LABEL),
-            Span::raw(name.to_string()),
-        ]));
+        lines.push(Line::from(Span::styled("Organizer:", theme::DETAIL_LABEL)));
+        lines.push(Line::from(format!("  • {name}")));
         lines.push(Line::from(""));
     }
 
@@ -105,23 +117,56 @@ fn build_detail_lines(event: &koyomi_core::calendar::Event) -> Vec<Line<'static>
     }
 
     if let Some(conf) = &event.conference_data {
+        use koyomi_core::calendar::EntryPointType;
+
+        lines.push(Line::from(Span::styled("Conference:", theme::DETAIL_LABEL)));
+
         if let Some(solution) = &conf.conference_solution {
-            lines.push(Line::from(vec![
-                Span::styled("Conference: ", theme::DETAIL_LABEL),
-                Span::raw(solution.name.clone()),
-            ]));
+            let video_uri = conf
+                .entry_points
+                .iter()
+                .find(|ep| ep.entry_point_type == EntryPointType::Video)
+                .map(|ep| ep.uri.as_str());
+            match video_uri {
+                Some(uri) => lines.push(Line::from(format!("  • {}: {uri}", solution.name))),
+                None => lines.push(Line::from(format!("  • {}", solution.name))),
+            }
         }
+
         for ep in &conf.entry_points {
-            lines.push(Line::from(format!("  {}", ep.uri)));
+            if ep.entry_point_type == EntryPointType::Video && conf.conference_solution.is_some() {
+                continue;
+            }
+            let label = match ep.entry_point_type {
+                EntryPointType::Video => "video",
+                EntryPointType::Phone => "phone",
+                EntryPointType::Sip => "sip",
+                EntryPointType::More => "more",
+                EntryPointType::Unknown => "other",
+            };
+            lines.push(Line::from(format!("  • {label}: {}", ep.uri)));
         }
+
         lines.push(Line::from(""));
     }
 
+    if let Some(reminders) = &event.reminders {
+        let has_overrides = !reminders.overrides.is_empty();
+        if reminders.use_default || has_overrides {
+            lines.push(Line::from(Span::styled("Reminders:", theme::DETAIL_LABEL)));
+            if reminders.use_default && !has_overrides {
+                lines.push(Line::from("  • calendar default"));
+            }
+            for o in &reminders.overrides {
+                lines.push(Line::from(format!("  • {}: {} minutes", o.method.as_str(), o.minutes)));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
     if let Some(link) = &event.html_link {
-        lines.push(Line::from(vec![
-            Span::styled("Link: ", theme::DETAIL_LABEL),
-            Span::raw(link.clone()),
-        ]));
+        lines.push(Line::from(Span::styled("Link:", theme::DETAIL_LABEL)));
+        lines.push(Line::from(format!("  •\u{00A0}{link}")));
     }
 
     lines

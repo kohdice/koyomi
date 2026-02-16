@@ -47,3 +47,7 @@ pub const ERROR_STYLE: Style = Style::new().fg(RED);
 
 // Detail modal
 pub const DETAIL_LABEL: Style = Style::new().fg(YELLOW).add_modifier(Modifier::BOLD);
+pub const STATUS_CONFIRMED: Style = Style::new().fg(GREEN);
+pub const STATUS_TENTATIVE: Style = Style::new().fg(YELLOW);
+pub const STATUS_CANCELLED: Style = Style::new().fg(RED);
+pub const STATUS_UNKNOWN: Style = Style::new().fg(CYAN);
