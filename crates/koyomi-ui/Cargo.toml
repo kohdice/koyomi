@@ -11,7 +11,7 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.101"
 chrono.workspace = true
-crossterm = "0.29"
+crossterm = "0.29.0"
 koyomi-core.workspace = true
 ratatui = "0.30"
 serde.workspace = true
