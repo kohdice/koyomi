@@ -19,10 +19,8 @@ pub enum Message {
     EventListDown,
     DetailScrollUp,
     DetailScrollDown,
-    DetailScrollTop,
-    DetailScrollBottom,
-
     RequestEvents,
+    RefreshEvents,
     EventsLoaded { calendar_name: String, events_by_month: HashMap<(i32, u32), Vec<Event>> },
     EventsLoadFailed { error: String },
 

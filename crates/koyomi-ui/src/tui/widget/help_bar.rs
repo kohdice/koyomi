@@ -13,6 +13,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     spans.extend(help_entry("n/p", "month"));
     spans.extend(help_entry("t", "today"));
     spans.extend(help_entry("Enter", "events"));
+    spans.extend(help_entry("r", "refresh"));
     spans.extend(help_entry("q", "quit"));
 
     if let Some(err) = &model.error_message {
