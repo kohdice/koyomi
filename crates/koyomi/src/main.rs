@@ -16,5 +16,7 @@ async fn main() -> ExitCode {
 }
 
 fn is_broken_pipe(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == ErrorKind::BrokenPipe)
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == ErrorKind::BrokenPipe)
+    })
 }

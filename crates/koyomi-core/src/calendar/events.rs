@@ -121,7 +121,14 @@ struct GoogleApiErrorBody {
 fn extract_error_message(body: &str) -> String {
     serde_json::from_str::<GoogleApiError>(body)
         .map(|e| e.error.message)
-        .unwrap_or_else(|_| body.to_string())
+        .unwrap_or_else(|_| truncate_string(body, 200))
+}
+
+fn truncate_string(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => format!("{}…", &s[..byte_idx]),
+        None => s.to_string(),
+    }
 }
 
 fn status_to_calendar_error(
@@ -853,5 +860,46 @@ mod tests {
         let reminders = events.events[0].reminders.as_ref().unwrap();
         assert!(reminders.use_default);
         assert!(reminders.overrides.is_empty());
+    }
+
+    #[test]
+    fn extract_error_message_parses_google_api_error() {
+        let body = r#"{"error":{"message":"Not Found","errors":[],"code":404}}"#;
+        assert_eq!(extract_error_message(body), "Not Found");
+    }
+
+    #[test]
+    fn extract_error_message_returns_truncated_fallback() {
+        let long_body = "x".repeat(300);
+        let result = extract_error_message(&long_body);
+        assert!(result.len() < 300);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn extract_error_message_returns_short_body_as_is() {
+        let body = "short error";
+        assert_eq!(extract_error_message(body), "short error");
+    }
+
+    #[test]
+    fn truncate_string_preserves_short_strings() {
+        assert_eq!(truncate_string("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_string_truncates_long_strings() {
+        let s = "a".repeat(250);
+        let result = truncate_string(&s, 200);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 201); // 200 chars + ellipsis
+    }
+
+    #[test]
+    fn truncate_string_handles_multibyte_chars() {
+        let s = "あ".repeat(250);
+        let result = truncate_string(&s, 200);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 201);
     }
 }

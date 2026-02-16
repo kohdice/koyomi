@@ -44,7 +44,9 @@ impl Client {
     /// Send an authenticated GET request with retry on transient errors.
     ///
     /// Retries on HTTP 429, 5xx, and 403 rate-limit errors with
-    /// exponential backoff and jitter.
+    /// exponential backoff and jitter. After exhausting all retries
+    /// (`MAX_RETRIES`), returns the last error response as `Ok(response)`
+    /// so that the caller can inspect the status code and body.
     pub(crate) async fn get(
         &self,
         url: &str,
