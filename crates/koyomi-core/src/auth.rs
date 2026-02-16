@@ -39,6 +39,8 @@ impl DeviceFlowSession {
 pub enum LogoutResult {
     /// Successfully logged out and token was removed.
     LoggedOut,
+    /// Logged out locally, but token revocation with Google failed.
+    LoggedOutRevocationFailed,
     /// No token was found; user was not logged in.
     NotLoggedIn,
     /// Token file was corrupt and has been removed.
@@ -185,15 +187,23 @@ pub async fn logout(client: &crate::client::Client) -> Result<LogoutResult> {
             let revoke_token =
                 stored_token.refresh_token().unwrap_or_else(|| stored_token.access_token());
 
-            match client.http().post(REVOKE_URL).form(&[("token", revoke_token)]).send().await {
+            let revocation_failed = match client
+                .http()
+                .post(REVOKE_URL)
+                .form(&[("token", revoke_token)])
+                .send()
+                .await
+            {
                 Ok(response) if response.status().is_success() => {
                     debug!("Token revoked successfully with Google");
+                    false
                 }
                 Ok(response) => {
                     warn!(
                         "Token revocation returned HTTP {}: token may still be valid on Google's side",
                         response.status()
                     );
+                    true
                 }
                 Err(e) => {
                     warn!(
@@ -201,12 +211,17 @@ pub async fn logout(client: &crate::client::Client) -> Result<LogoutResult> {
                          token may still be valid on Google's side",
                         e
                     );
+                    true
                 }
-            }
+            };
 
             token::delete(&token_path)?;
             info!("Token file has been removed");
-            Ok(LogoutResult::LoggedOut)
+            if revocation_failed {
+                Ok(LogoutResult::LoggedOutRevocationFailed)
+            } else {
+                Ok(LogoutResult::LoggedOut)
+            }
         }
         Err(Error::TokenNotFound) => Ok(LogoutResult::NotLoggedIn),
         Err(Error::Io(io_err)) => Err(Error::Io(io_err)),
