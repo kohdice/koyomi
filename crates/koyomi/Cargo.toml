@@ -20,6 +20,3 @@ koyomi-ui.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing.workspace = true
 tracing-subscriber = "0.3.22"
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
