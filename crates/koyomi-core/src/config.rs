@@ -26,10 +26,7 @@ pub(crate) fn config_dir() -> Result<PathBuf> {
             return Ok(path.join(CONFIG_DIR));
         }
         if !xdg.is_empty() && !path.is_absolute() {
-            eprintln!(
-                "koyomi: warning: XDG_CONFIG_HOME is set to a relative path '{}'; using default",
-                xdg
-            );
+            tracing::warn!("XDG_CONFIG_HOME is set to a relative path '{}'; using default", xdg);
         }
     }
 
@@ -51,10 +48,7 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
             return Ok(path.join(CONFIG_DIR));
         }
         if !xdg.is_empty() && !path.is_absolute() {
-            eprintln!(
-                "koyomi: warning: XDG_DATA_HOME is set to a relative path '{}'; using default",
-                xdg
-            );
+            tracing::warn!("XDG_DATA_HOME is set to a relative path '{}'; using default", xdg);
         }
     }
 
@@ -97,8 +91,8 @@ pub(crate) fn load_from_path(path: &std::path::Path) -> Result<ClientSecretFile>
             Ok(metadata) => {
                 let mode = metadata.permissions().mode() & 0o777;
                 if mode & 0o077 != 0 {
-                    eprintln!(
-                        "koyomi: warning: {} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
+                    tracing::warn!(
+                        "{} has permissions {:o}; recommended 0600. Fix with: chmod 600 {}",
                         path.display(),
                         mode,
                         path.display()
