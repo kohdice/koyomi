@@ -200,28 +200,9 @@ pub enum ResponseStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum EventPeriod {
-    /// Today only
-    #[default]
-    Day,
-    /// This week (from today to 7 days later)
-    Week,
-    /// This month (from today to 1 calendar month later)
-    Month,
-    /// A specific year and month (1st of the month to 1st of the next month)
-    YearMonth { year: i32, month: u32 },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn event_period_default_is_day() {
-        let period = EventPeriod::default();
-        assert_eq!(period, EventPeriod::Day);
-    }
 
     #[test]
     fn event_status_serializes_lowercase() {

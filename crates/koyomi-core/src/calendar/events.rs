@@ -1,8 +1,8 @@
-use chrono::{DateTime, Local, NaiveDate, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use super::types::{CalendarEvents, Event, EventPeriod};
+use super::types::{CalendarEvents, Event};
 use crate::{CalendarError, Result};
 
 pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
@@ -44,7 +44,8 @@ const MAX_PAGES: u32 = 50;
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
     pub(crate) calendar_id: String,
-    pub(crate) period: EventPeriod,
+    pub(crate) time_min: DateTime<Utc>,
+    pub(crate) time_max: DateTime<Utc>,
     pub(crate) max_results: u32,
 }
 
@@ -56,7 +57,13 @@ impl ListEventsConfig {
     /// Returns an error if:
     /// - `calendar_id` is empty
     /// - `max_results` is outside the range `1..=2500`
-    pub fn new(calendar_id: String, period: EventPeriod, max_results: u32) -> crate::Result<Self> {
+    /// - `time_min` is not before `time_max`
+    pub fn new(
+        calendar_id: String,
+        time_min: DateTime<Utc>,
+        time_max: DateTime<Utc>,
+        max_results: u32,
+    ) -> crate::Result<Self> {
         if calendar_id.is_empty() {
             return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
         }
@@ -65,15 +72,22 @@ impl ListEventsConfig {
                 "max_results must be between 1 and {MAX_RESULTS_LIMIT}"
             )));
         }
-        Ok(Self { calendar_id, period, max_results })
+        if time_min >= time_max {
+            return Err(crate::Error::ConfigInvalid("time_min must be before time_max".into()));
+        }
+        Ok(Self { calendar_id, time_min, time_max, max_results })
     }
 }
 
 impl Default for ListEventsConfig {
     fn default() -> Self {
+        let tz = super::time_range::TimeZone::default();
+        let (time_min, time_max) = super::time_range::for_day(tz.today(), tz)
+            .expect("default time range should always be valid");
         Self {
             calendar_id: "primary".to_string(),
-            period: EventPeriod::default(),
+            time_min,
+            time_max,
             max_results: DEFAULT_MAX_RESULTS,
         }
     }
@@ -170,56 +184,6 @@ pub(crate) async fn get_calendar_name(
     }))
 }
 
-/// Calculate time range based on period
-///
-/// # Errors
-///
-/// Returns an error if the time or timezone conversion fails
-fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    let now = Local::now();
-    let today_start = now
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| CalendarError::InvalidTime("failed to create midnight time".into()))?
-        .and_local_timezone(now.timezone())
-        .single()
-        .ok_or_else(|| CalendarError::InvalidTime("timezone conversion failed".into()))?;
-
-    let (start, end) = match period {
-        EventPeriod::Day => {
-            let end = today_start + TimeDelta::days(1);
-            (today_start, end)
-        }
-        EventPeriod::Week => {
-            let end = today_start + TimeDelta::days(7);
-            (today_start, end)
-        }
-        EventPeriod::Month => {
-            let end = today_start.checked_add_months(chrono::Months::new(1)).ok_or_else(|| {
-                CalendarError::InvalidTime("failed to add 1 calendar month".into())
-            })?;
-            (today_start, end)
-        }
-        EventPeriod::YearMonth { year, month } => {
-            let start_date = NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| {
-                CalendarError::InvalidTime(format!("invalid year/month: {year}/{month}"))
-            })?;
-            let start = start_date
-                .and_hms_opt(0, 0, 0)
-                .expect("midnight is always valid")
-                .and_local_timezone(Local)
-                .single()
-                .ok_or_else(|| CalendarError::InvalidTime("timezone conversion failed".into()))?;
-            let end = start
-                .checked_add_months(chrono::Months::new(1))
-                .ok_or_else(|| CalendarError::InvalidTime("failed to add 1 month".into()))?;
-            (start, end)
-        }
-    };
-
-    Ok((start.with_timezone(&Utc), end.with_timezone(&Utc)))
-}
-
 /// List calendar events
 ///
 /// # Errors
@@ -233,7 +197,8 @@ pub(crate) async fn list_events(
     config: &ListEventsConfig,
     base_url: &str,
 ) -> Result<CalendarEvents> {
-    let (time_min, time_max) = calculate_time_range(config.period)?;
+    let time_min = config.time_min;
+    let time_max = config.time_max;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
 
@@ -321,60 +286,22 @@ mod tests {
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn sample_time_range() -> (DateTime<Utc>, DateTime<Utc>) {
+        use super::super::time_range::TimeZone;
+        use chrono::NaiveDate;
+        super::super::time_range::for_day(
+            NaiveDate::from_ymd_opt(2026, 2, 16).unwrap(),
+            TimeZone::Jst,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn list_events_config_default() {
         let config = ListEventsConfig::default();
         assert_eq!(config.calendar_id, "primary");
-        assert_eq!(config.period, EventPeriod::Day);
+        assert!(config.time_min < config.time_max);
         assert_eq!(config.max_results, 250);
-    }
-
-    #[test]
-    fn calculate_time_range_day() {
-        let (start, end) = calculate_time_range(EventPeriod::Day).unwrap();
-        let diff = end - start;
-        assert_eq!(diff.num_days(), 1);
-    }
-
-    #[test]
-    fn calculate_time_range_week() {
-        let (start, end) = calculate_time_range(EventPeriod::Week).unwrap();
-        let diff = end - start;
-        assert_eq!(diff.num_days(), 7);
-    }
-
-    #[test]
-    fn calculate_time_range_month() {
-        let (start, end) = calculate_time_range(EventPeriod::Month).unwrap();
-        let diff = end - start;
-        let days = diff.num_days();
-        assert!((28..=31).contains(&days), "Expected 28-31 days for a calendar month, got {days}");
-    }
-
-    #[test]
-    fn calculate_time_range_year_month() {
-        let (start, end) =
-            calculate_time_range(EventPeriod::YearMonth { year: 2026, month: 2 }).unwrap();
-        let diff = end - start;
-        let days = diff.num_days();
-        assert_eq!(days, 28, "February 2026 should have 28 days, got {days}");
-    }
-
-    #[test]
-    fn calculate_time_range_year_month_leap_year() {
-        let (start, end) =
-            calculate_time_range(EventPeriod::YearMonth { year: 2028, month: 2 }).unwrap();
-        let diff = end - start;
-        let days = diff.num_days();
-        assert_eq!(days, 29, "February 2028 (leap year) should have 29 days, got {days}");
-    }
-
-    #[test]
-    fn calculate_time_range_year_month_invalid() {
-        let result = calculate_time_range(EventPeriod::YearMonth { year: 2026, month: 13 });
-        assert!(result.is_err());
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("invalid year/month"), "Expected 'invalid year/month' in: {error}");
     }
 
     #[tokio::test]
@@ -639,39 +566,61 @@ mod tests {
 
     #[test]
     fn list_events_config_new_validates_empty_calendar_id() {
-        let result = ListEventsConfig::new(String::new(), EventPeriod::Day, 250);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new(String::new(), time_min, time_max, 250);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
     }
 
     #[test]
     fn list_events_config_new_validates_max_results_zero() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 0);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 0);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max_results must be between"));
     }
 
     #[test]
     fn list_events_config_new_validates_max_results_over_limit() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2501);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 2501);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max_results must be between"));
     }
 
     #[test]
+    fn list_events_config_new_validates_time_order() {
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_max, time_min, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("time_min must be before time_max"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_equal_times() {
+        let (time_min, _) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_min, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("time_min must be before time_max"));
+    }
+
+    #[test]
     fn list_events_config_new_accepts_valid_params() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Week, 100);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 100);
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.calendar_id, "primary");
-        assert_eq!(config.period, EventPeriod::Week);
+        assert_eq!(config.time_min, time_min);
+        assert_eq!(config.time_max, time_max);
         assert_eq!(config.max_results, 100);
     }
 
     #[test]
     fn list_events_config_new_accepts_boundary_values() {
-        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 1).is_ok());
-        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2500).is_ok());
+        let (time_min, time_max) = sample_time_range();
+        assert!(ListEventsConfig::new("primary".to_string(), time_min, time_max, 1).is_ok());
+        assert!(ListEventsConfig::new("primary".to_string(), time_min, time_max, 2500).is_ok());
     }
 
     #[tokio::test]
