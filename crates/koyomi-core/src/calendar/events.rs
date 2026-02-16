@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, TimeDelta, Utc};
+use chrono::{DateTime, Local, NaiveDate, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
@@ -200,6 +200,21 @@ fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<
             })?;
             (today_start, end)
         }
+        EventPeriod::YearMonth { year, month } => {
+            let start_date = NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| {
+                CalendarError::InvalidTime(format!("invalid year/month: {year}/{month}"))
+            })?;
+            let start = start_date
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight is always valid")
+                .and_local_timezone(Local)
+                .single()
+                .ok_or_else(|| CalendarError::InvalidTime("timezone conversion failed".into()))?;
+            let end = start
+                .checked_add_months(chrono::Months::new(1))
+                .ok_or_else(|| CalendarError::InvalidTime("failed to add 1 month".into()))?;
+            (start, end)
+        }
     };
 
     Ok((start.with_timezone(&Utc), end.with_timezone(&Utc)))
@@ -336,6 +351,32 @@ mod tests {
         assert!((28..=31).contains(&days), "Expected 28-31 days for a calendar month, got {days}");
     }
 
+    #[test]
+    fn calculate_time_range_year_month() {
+        let (start, end) =
+            calculate_time_range(EventPeriod::YearMonth { year: 2026, month: 2 }).unwrap();
+        let diff = end - start;
+        let days = diff.num_days();
+        assert_eq!(days, 28, "February 2026 should have 28 days, got {days}");
+    }
+
+    #[test]
+    fn calculate_time_range_year_month_leap_year() {
+        let (start, end) =
+            calculate_time_range(EventPeriod::YearMonth { year: 2028, month: 2 }).unwrap();
+        let diff = end - start;
+        let days = diff.num_days();
+        assert_eq!(days, 29, "February 2028 (leap year) should have 29 days, got {days}");
+    }
+
+    #[test]
+    fn calculate_time_range_year_month_invalid() {
+        let result = calculate_time_range(EventPeriod::YearMonth { year: 2026, month: 13 });
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid year/month"), "Expected 'invalid year/month' in: {error}");
+    }
+
     #[tokio::test]
     async fn get_calendar_name_returns_summary() {
         let mock_server = MockServer::start().await;
@@ -399,7 +440,6 @@ mod tests {
     async fn list_events_returns_events() {
         let mock_server = MockServer::start().await;
 
-        // Mock calendar info
         Mock::given(method("GET"))
             .and(path("/primary"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -408,7 +448,6 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        // Mock events list
         Mock::given(method("GET"))
             .and(path("/primary/events"))
             .and(query_param("singleEvents", "true"))

@@ -209,6 +209,8 @@ pub enum EventPeriod {
     Week,
     /// This month (from today to 1 calendar month later)
     Month,
+    /// A specific year and month (1st of the month to 1st of the next month)
+    YearMonth { year: i32, month: u32 },
 }
 
 #[cfg(test)]
