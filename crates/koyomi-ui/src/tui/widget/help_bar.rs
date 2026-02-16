@@ -5,6 +5,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::tui::model::Model;
 use crate::tui::theme;
+use crate::tui::widget::utils::help_entry;
 
 pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     let mut spans = Vec::new();
@@ -21,11 +22,4 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     f.render_widget(paragraph, area);
-}
-
-fn help_entry(key: &str, desc: &str) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(key.to_string(), theme::HELP_KEY),
-        Span::styled(format!(" {desc}  "), theme::HELP_BAR),
-    ]
 }

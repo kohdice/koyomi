@@ -6,6 +6,7 @@ use ratatui::widgets::{Clear, Paragraph};
 use crate::tui::model::{Focus, Model};
 use crate::tui::theme;
 use crate::tui::widget;
+use crate::tui::widget::utils::help_entry;
 
 const HORIZONTAL_LAYOUT_MIN_WIDTH: u16 = 120;
 
@@ -73,11 +74,4 @@ fn render_help_bar(f: &mut Frame, area: Rect, model: &Model) {
 
     let line = Line::from(spans);
     f.render_widget(Paragraph::new(line), area);
-}
-
-fn help_entry(key: &str, desc: &str) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(key.to_string(), theme::HELP_KEY),
-        Span::styled(format!(" {desc}  "), theme::HELP_BAR),
-    ]
 }

@@ -1,15 +1,30 @@
+use std::borrow::Cow;
+
+use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
+
+use crate::tui::theme;
+
+pub fn help_entry(key: &str, desc: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(key.to_string(), theme::HELP_KEY),
+        Span::styled(format!(" {desc}  "), theme::HELP_BAR),
+    ]
+}
 
 /// Truncate a string to fit within `max_width` display columns,
 /// appending "…" if truncated.
-pub fn truncate_str(s: &str, max_width: usize) -> String {
+///
+/// Returns `Cow::Borrowed` when no truncation is needed (zero allocation),
+/// or `Cow::Owned` with the truncated string plus "…" suffix.
+pub fn truncate_str(s: &str, max_width: usize) -> Cow<'_, str> {
     let width = UnicodeWidthStr::width(s);
     if width <= max_width {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
 
     if max_width == 0 {
-        return String::new();
+        return Cow::Borrowed("");
     }
 
     let mut result = String::new();
@@ -26,7 +41,7 @@ pub fn truncate_str(s: &str, max_width: usize) -> String {
     }
 
     result.push('…');
-    result
+    Cow::Owned(result)
 }
 
 #[cfg(test)]
@@ -47,7 +62,7 @@ mod tests {
     fn truncate_long_string() {
         let result = truncate_str("hello world", 6);
         assert!(result.ends_with('…'));
-        assert!(UnicodeWidthStr::width(result.as_str()) <= 6);
+        assert!(UnicodeWidthStr::width(&*result) <= 6);
     }
 
     #[test]
@@ -60,7 +75,7 @@ mod tests {
         let result = truncate_str("こんにちは世界", 6);
         // Each CJK character is 2 columns wide
         // 6 columns = 2 chars (4 cols) + ellipsis (1 col) = 5 cols
-        assert!(UnicodeWidthStr::width(result.as_str()) <= 6);
+        assert!(UnicodeWidthStr::width(&*result) <= 6);
         assert!(result.ends_with('…'));
     }
 }

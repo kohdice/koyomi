@@ -15,11 +15,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
         theme::UNFOCUSED_BORDER
     };
 
-    let header = format!(
-        " Events — {}/{:02} ",
-        model.selected_date.format("%Y"),
-        model.selected_date.format("%m/%d"),
-    );
+    let header = format!(" Events — {} ", model.selected_date.format("%Y/%m/%d"));
 
     let block = Block::default().title(header).borders(Borders::ALL).border_style(border_style);
 
@@ -56,14 +52,14 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
 
         let title = event.summary.as_deref().unwrap_or("(No title)");
         let title_span = Span::styled(
-            truncate_str(title, content_width.saturating_sub(time.len() + 4)),
+            truncate_str(title, content_width.saturating_sub(time.len() + 4)).into_owned(),
             theme::EVENT_TITLE,
         );
 
         lines.push(Line::from(vec![indicator, time_span, title_span]));
 
         if let Some(location) = &event.location {
-            let loc_display = truncate_str(location, content_width.saturating_sub(4));
+            let loc_display = truncate_str(location, content_width.saturating_sub(4)).into_owned();
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(loc_display, theme::EVENT_LOCATION),

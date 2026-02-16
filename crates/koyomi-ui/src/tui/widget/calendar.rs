@@ -240,13 +240,14 @@ fn render_cell(
         for (i, ev) in day_events.iter().take(max_lines).enumerate() {
             if i == max_lines - 1 && day_events.len() > max_lines {
                 let more = format!("+{}", day_events.len() - i);
-                buf.set_string(x, y + 1 + i as u16, truncate_str(&more, cw), ev_style);
+                buf.set_string(x, y + 1 + i as u16, &*truncate_str(&more, cw), ev_style);
                 break;
             }
             let time = calendar_grid::format_event_time_compact(ev);
             let title = ev.summary.as_deref().unwrap_or("");
-            let text = truncate_str(&format!("{time}{title}"), cw);
-            buf.set_string(x, y + 1 + i as u16, text, ev_style);
+            let combined = format!("{time}{title}");
+            let text = truncate_str(&combined, cw);
+            buf.set_string(x, y + 1 + i as u16, &*text, ev_style);
         }
     }
 }
@@ -289,7 +290,7 @@ fn day_of_week_style(date: NaiveDate) -> Style {
 fn center_in_width(text: &str, width: usize) -> String {
     let tw = UnicodeWidthStr::width(text);
     if tw >= width {
-        return truncate_str(text, width);
+        return truncate_str(text, width).into_owned();
     }
     let left = (width - tw) / 2;
     let right = width - tw - left;
