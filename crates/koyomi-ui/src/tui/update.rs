@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeDelta};
 
 use super::calendar_grid;
 use super::message::Message;
@@ -44,8 +44,11 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
         }
 
         Message::OpenEventModal => {
-            let events =
-                calendar_grid::events_for_date(model.selected_date_events(), model.selected_date);
+            let events = calendar_grid::events_for_date(
+                model.current_month_events(),
+                model.selected_date,
+                model.tz,
+            );
             if !events.is_empty() {
                 model.event_modal_open = true;
                 model.focus = Focus::EventList;
@@ -77,8 +80,11 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             None
         }
         Message::EventListDown => {
-            let events =
-                calendar_grid::events_for_date(model.selected_date_events(), model.selected_date);
+            let events = calendar_grid::events_for_date(
+                model.current_month_events(),
+                model.selected_date,
+                model.tz,
+            );
             let max_index = events.len().saturating_sub(1);
             if model.event_list_index < max_index {
                 model.event_list_index += 1;
@@ -121,7 +127,7 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
 }
 
 fn move_date(model: &mut Model, days: i64) {
-    if let Some(new_date) = model.selected_date.checked_add_signed(Duration::days(days)) {
+    if let Some(new_date) = model.selected_date.checked_add_signed(TimeDelta::days(days)) {
         model.selected_date = new_date;
         model.current_year = new_date.year();
         model.current_month = new_date.month();
@@ -160,7 +166,10 @@ fn days_in_month(year: i32, month: u32) -> u32 {
         .or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1))
         .and_then(|d| d.pred_opt())
         .map(|d| d.day())
-        .unwrap_or(28)
+        .unwrap_or_else(|| {
+            tracing::warn!("Could not compute days in month for {year}/{month}; defaulting to 28");
+            28
+        })
 }
 
 fn check_month_change(model: &Model) -> Option<Message> {
@@ -189,7 +198,7 @@ mod tests {
         let mut model = default_model();
         let original = model.selected_date;
         update(&mut model, Message::MoveRight);
-        assert_eq!(model.selected_date, original + Duration::days(1));
+        assert_eq!(model.selected_date, original + TimeDelta::days(1));
     }
 
     #[test]
@@ -197,7 +206,7 @@ mod tests {
         let mut model = default_model();
         let original = model.selected_date;
         update(&mut model, Message::MoveLeft);
-        assert_eq!(model.selected_date, original - Duration::days(1));
+        assert_eq!(model.selected_date, original - TimeDelta::days(1));
     }
 
     #[test]
@@ -205,7 +214,7 @@ mod tests {
         let mut model = default_model();
         let original = model.selected_date;
         update(&mut model, Message::MoveDown);
-        assert_eq!(model.selected_date, original + Duration::days(7));
+        assert_eq!(model.selected_date, original + TimeDelta::days(7));
     }
 
     #[test]
@@ -213,7 +222,7 @@ mod tests {
         let mut model = default_model();
         let original = model.selected_date;
         update(&mut model, Message::MoveUp);
-        assert_eq!(model.selected_date, original - Duration::days(7));
+        assert_eq!(model.selected_date, original - TimeDelta::days(7));
     }
 
     #[test]

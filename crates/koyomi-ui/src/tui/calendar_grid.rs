@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeDelta};
 use koyomi_core::calendar::{Event, EventDateTime};
 
 /// Build a month grid as rows of 7 columns (Sunday-start).
@@ -12,7 +12,7 @@ pub fn build_month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
 
     let start_weekday = first_day.weekday();
     let offset = start_weekday.num_days_from_sunday() as i64;
-    let grid_start = first_day - Duration::days(offset);
+    let grid_start = first_day - TimeDelta::days(offset);
 
     const ROW_COUNT: usize = 6;
     let mut rows = Vec::with_capacity(ROW_COUNT);
@@ -20,7 +20,7 @@ pub fn build_month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
     for week in 0..ROW_COUNT {
         let mut row = [None; 7];
         for day in 0..7u32 {
-            let date = grid_start + Duration::days((week * 7 + day as usize) as i64);
+            let date = grid_start + TimeDelta::days((week * 7 + day as usize) as i64);
             row[day as usize] = Some(date);
         }
         rows.push(row);
@@ -29,21 +29,38 @@ pub fn build_month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
     rows
 }
 
-/// Extract a `NaiveDate` from an `EventDateTime`.
-pub fn event_date(edt: &EventDateTime) -> Option<NaiveDate> {
+/// Extract a `NaiveDate` from an `EventDateTime`, converting to the given timezone.
+pub fn event_date(edt: &EventDateTime, tz: koyomi_core::calendar::TimeZone) -> Option<NaiveDate> {
     match edt {
         EventDateTime::DateTime { date_time, .. } => {
-            chrono::DateTime::parse_from_rfc3339(date_time).ok().map(|dt| dt.date_naive())
+            let offset = tz.fixed_offset();
+            match chrono::DateTime::parse_from_rfc3339(date_time) {
+                Ok(dt) => Some(dt.with_timezone(&offset).date_naive()),
+                Err(e) => {
+                    tracing::debug!("Failed to parse RFC 3339 datetime '{date_time}': {e}");
+                    None
+                }
+            }
         }
-        EventDateTime::Date { date } => NaiveDate::parse_from_str(date, "%Y-%m-%d").ok(),
+        EventDateTime::Date { date } => match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            Ok(d) => Some(d),
+            Err(e) => {
+                tracing::debug!("Failed to parse date '{date}': {e}");
+                None
+            }
+        },
     }
 }
 
 /// Filter events that occur on the given date.
-pub fn events_for_date(events: &[Event], date: NaiveDate) -> Vec<&Event> {
+pub fn events_for_date(
+    events: &[Event],
+    date: NaiveDate,
+    tz: koyomi_core::calendar::TimeZone,
+) -> Vec<&Event> {
     events
         .iter()
-        .filter(|e| e.start.as_ref().and_then(event_date).is_some_and(|d| d == date))
+        .filter(|e| e.start.as_ref().and_then(|s| event_date(s, tz)).is_some_and(|d| d == date))
         .collect()
 }
 
@@ -51,10 +68,12 @@ pub fn events_for_date(events: &[Event], date: NaiveDate) -> Vec<&Event> {
 pub fn format_event_time(event: &Event) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date_time) {
-                format!("{}", dt.format("%H:%M"))
-            } else {
-                String::new()
+            match chrono::DateTime::parse_from_rfc3339(date_time) {
+                Ok(dt) => format!("{}", dt.format("%H:%M")),
+                Err(e) => {
+                    tracing::debug!("format_event_time: failed to parse '{date_time}': {e}");
+                    String::new()
+                }
             }
         }
         Some(EventDateTime::Date { .. }) => "All day".to_string(),
@@ -69,10 +88,14 @@ pub fn format_event_time(event: &Event) -> String {
 pub fn format_event_time_compact(event: &Event) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date_time) {
-                format!("{}:", dt.format("%H"))
-            } else {
-                String::new()
+            match chrono::DateTime::parse_from_rfc3339(date_time) {
+                Ok(dt) => format!("{}:", dt.format("%H")),
+                Err(e) => {
+                    tracing::debug!(
+                        "format_event_time_compact: failed to parse '{date_time}': {e}"
+                    );
+                    String::new()
+                }
             }
         }
         Some(EventDateTime::Date { .. }) => "00:".to_string(),
@@ -134,19 +157,35 @@ mod tests {
 
     #[test]
     fn event_date_parses_datetime() {
+        use koyomi_core::calendar::TimeZone;
         let edt = EventDateTime::DateTime {
             date_time: "2026-02-16T10:00:00+09:00".to_string(),
             time_zone: Some("Asia/Tokyo".to_string()),
         };
-        let date = event_date(&edt).unwrap();
+        let date = event_date(&edt, TimeZone::Jst).unwrap();
         assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
     }
 
     #[test]
     fn event_date_parses_all_day() {
+        use koyomi_core::calendar::TimeZone;
         let edt = EventDateTime::Date { date: "2026-02-16".to_string() };
-        let date = event_date(&edt).unwrap();
+        let date = event_date(&edt, TimeZone::Jst).unwrap();
         assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
+    }
+
+    #[test]
+    fn event_date_converts_timezone_across_date_boundary() {
+        use koyomi_core::calendar::TimeZone;
+        // UTC 23:30 on Feb 16 → JST 08:30 on Feb 17
+        let edt = EventDateTime::DateTime {
+            date_time: "2026-02-16T23:30:00+00:00".to_string(),
+            time_zone: Some("UTC".to_string()),
+        };
+        let date_utc = event_date(&edt, TimeZone::Utc).unwrap();
+        assert_eq!(date_utc, NaiveDate::from_ymd_opt(2026, 2, 16).unwrap());
+        let date_jst = event_date(&edt, TimeZone::Jst).unwrap();
+        assert_eq!(date_jst, NaiveDate::from_ymd_opt(2026, 2, 17).unwrap());
     }
 
     #[test]

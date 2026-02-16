@@ -232,7 +232,7 @@ fn render_cell(
     buf.set_string(x, y, &day_str, date_style);
 
     if in_month && h > 1 {
-        let day_events = events_for_date(events, date);
+        let day_events = events_for_date(events, date, model.tz);
         let max_lines = (h as usize).saturating_sub(1);
         let cw = w as usize;
         let ev_style = bg_style.patch(theme::EVENT_TIME);

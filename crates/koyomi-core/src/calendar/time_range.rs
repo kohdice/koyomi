@@ -18,6 +18,16 @@ pub enum TimeZone {
 }
 
 impl TimeZone {
+    /// Return the fixed UTC offset for this timezone.
+    #[must_use]
+    pub fn fixed_offset(self) -> FixedOffset {
+        match self {
+            Self::Local => *Local::now().offset(),
+            Self::Jst => FixedOffset::east_opt(9 * 3600).expect("JST offset is always valid"),
+            Self::Utc => FixedOffset::east_opt(0).expect("UTC offset is always valid"),
+        }
+    }
+
     /// Return today's date in this timezone.
     #[must_use]
     pub fn today(self) -> NaiveDate {

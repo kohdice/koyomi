@@ -20,7 +20,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &mut Model) {
         .map(Vec::as_slice)
         .unwrap_or_default();
 
-    let day_events = events_for_date(events, model.selected_date);
+    let day_events = events_for_date(events, model.selected_date, model.tz);
 
     let Some(event) = day_events.get(model.event_list_index) else {
         let block =

@@ -15,6 +15,7 @@ pub struct Model {
     pub current_month: u32,
     pub selected_date: NaiveDate,
     pub today: NaiveDate,
+    pub tz: koyomi_core::calendar::TimeZone,
 
     pub events_cache: HashMap<(i32, u32), Vec<Event>>,
     pub calendar_name: Option<String>,
@@ -38,6 +39,7 @@ impl Model {
             current_month: today.month(),
             selected_date: today,
             today,
+            tz,
             events_cache: HashMap::new(),
             calendar_name: None,
             calendar_id,
@@ -54,7 +56,7 @@ impl Model {
         !self.events_cache.contains_key(&(self.current_year, self.current_month))
     }
 
-    pub fn selected_date_events(&self) -> &[Event] {
+    pub fn current_month_events(&self) -> &[Event] {
         self.events_cache
             .get(&(self.current_year, self.current_month))
             .map(Vec::as_slice)
@@ -88,9 +90,9 @@ mod tests {
     }
 
     #[test]
-    fn selected_date_events_returns_empty_when_no_cache() {
+    fn current_month_events_returns_empty_when_no_cache() {
         let model = Model::new("primary".to_string(), TimeZone::Jst);
-        assert!(model.selected_date_events().is_empty());
+        assert!(model.current_month_events().is_empty());
     }
 
     #[test]

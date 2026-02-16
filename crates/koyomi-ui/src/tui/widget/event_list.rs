@@ -28,7 +28,7 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
         .map(Vec::as_slice)
         .unwrap_or_default();
 
-    let day_events = events_for_date(events, model.selected_date);
+    let day_events = events_for_date(events, model.selected_date, model.tz);
 
     if day_events.is_empty() {
         let msg = if model.is_current_month_loading() { "Loading..." } else { "No events" };

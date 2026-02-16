@@ -38,10 +38,12 @@ pub async fn run(
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
 
-    let backend = CrosstermBackend::new(stdout());
-    let terminal = Terminal::new(backend)?;
-
-    let result = App::new(terminal, client, token, calendar_id, tz).run().await;
+    let result = async {
+        let backend = CrosstermBackend::new(stdout());
+        let terminal = Terminal::new(backend)?;
+        App::new(terminal, client, token, calendar_id, tz).run().await
+    }
+    .await;
 
     restore_terminal()?;
 
@@ -51,7 +53,9 @@ pub async fn run(
 fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = restore_terminal();
+        if let Err(e) = restore_terminal() {
+            eprintln!("koyomi: warning: failed to restore terminal in panic hook: {e}");
+        }
         original_hook(panic_info);
     }));
 }

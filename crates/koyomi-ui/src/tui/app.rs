@@ -61,7 +61,11 @@ impl App {
                                 break;
                             }
                         }
-                        Err(_) => break,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) => {
+                            tracing::warn!("Terminal event read error: {e}");
+                            break;
+                        }
                         _ => {}
                     },
                     Ok(false) => {
@@ -69,7 +73,11 @@ impl App {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        tracing::warn!("Terminal event poll error: {e}");
+                        break;
+                    }
                 }
             }
         });
@@ -148,7 +156,9 @@ impl App {
             ) {
                 Ok(range) => range,
                 Err(e) => {
-                    let _ = tx.send(Message::EventsLoadFailed { error: format!("{e:#}") });
+                    if tx.send(Message::EventsLoadFailed { error: format!("{e:#}") }).is_err() {
+                        debug!("Message channel closed; dropping EventsLoadFailed");
+                    }
                     return;
                 }
             };
@@ -160,22 +170,36 @@ impl App {
             ) {
                 Ok(config) => config,
                 Err(e) => {
-                    let _ = tx.send(Message::EventsLoadFailed { error: format!("{e:#}") });
+                    if tx.send(Message::EventsLoadFailed { error: format!("{e:#}") }).is_err() {
+                        debug!("Message channel closed; dropping EventsLoadFailed");
+                    }
                     return;
                 }
             };
 
             match client.list_events(&token, &config).await {
                 Ok(result) => {
-                    let events_by_month =
-                        distribute_events(result.events, start_year, start_month, PREFETCH_MONTHS);
-                    let _ = tx.send(Message::EventsLoaded {
-                        calendar_name: result.calendar,
-                        events_by_month,
-                    });
+                    let events_by_month = distribute_events(
+                        result.events,
+                        start_year,
+                        start_month,
+                        PREFETCH_MONTHS,
+                        tz,
+                    );
+                    if tx
+                        .send(Message::EventsLoaded {
+                            calendar_name: result.calendar,
+                            events_by_month,
+                        })
+                        .is_err()
+                    {
+                        debug!("Message channel closed; dropping EventsLoaded");
+                    }
                 }
                 Err(e) => {
-                    let _ = tx.send(Message::EventsLoadFailed { error: format!("{e:#}") });
+                    if tx.send(Message::EventsLoadFailed { error: format!("{e:#}") }).is_err() {
+                        debug!("Message channel closed; dropping EventsLoadFailed");
+                    }
                 }
             }
         });
@@ -203,6 +227,7 @@ fn distribute_events(
     start_year: i32,
     start_month: u32,
     months: u32,
+    tz: koyomi_core::calendar::TimeZone,
 ) -> HashMap<(i32, u32), Vec<koyomi_core::calendar::Event>> {
     let mut map: HashMap<(i32, u32), Vec<koyomi_core::calendar::Event>> = HashMap::new();
 
@@ -219,7 +244,7 @@ fn distribute_events(
 
     for event in events {
         if let Some(start) = &event.start
-            && let Some(date) = calendar_grid::event_date(start)
+            && let Some(date) = calendar_grid::event_date(start, tz)
         {
             let key = (date.year(), date.month());
             if let Some(bucket) = map.get_mut(&key) {
@@ -266,7 +291,7 @@ mod tests {
 
     #[test]
     fn distribute_events_empty() {
-        let map = distribute_events(vec![], 2025, 8, 13);
+        let map = distribute_events(vec![], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
         assert_eq!(map.len(), 13);
         for events in map.values() {
             assert!(events.is_empty());
@@ -295,7 +320,7 @@ mod tests {
             html_link: None,
         };
 
-        let map = distribute_events(vec![event], 2025, 8, 13);
+        let map = distribute_events(vec![event], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
         assert_eq!(map.get(&(2025, 10)).unwrap().len(), 1);
         assert!(map.get(&(2025, 8)).unwrap().is_empty());
     }
@@ -322,7 +347,7 @@ mod tests {
             html_link: None,
         };
 
-        let map = distribute_events(vec![event], 2025, 8, 13);
+        let map = distribute_events(vec![event], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
         for events in map.values() {
             assert!(events.is_empty());
         }
@@ -347,7 +372,7 @@ mod tests {
             html_link: None,
         };
 
-        let map = distribute_events(vec![event], 2025, 8, 13);
+        let map = distribute_events(vec![event], 2025, 8, 13, koyomi_core::calendar::TimeZone::Jst);
         assert_eq!(map.get(&(2026, 1)).unwrap().len(), 1);
     }
 }
