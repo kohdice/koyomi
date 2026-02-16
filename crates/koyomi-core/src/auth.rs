@@ -10,9 +10,9 @@ use crate::{Error, Result, config};
 
 /// Information returned from the device authorization flow start.
 ///
-/// Contains the URL and code that the user must use to authorize access.
+/// Contains the URI and code that the user must use to authorize access.
 pub struct DeviceFlowSession {
-    verification_url: String,
+    verification_uri: String,
     user_code: String,
     device_code: String,
     interval: u64,
@@ -21,13 +21,13 @@ pub struct DeviceFlowSession {
 }
 
 impl DeviceFlowSession {
-    /// Returns the URL where the user should visit to authorize.
+    /// Returns the URI where the user should visit to authorize (RFC 8628).
     #[must_use]
-    pub fn verification_url(&self) -> &str {
-        &self.verification_url
+    pub fn verification_uri(&self) -> &str {
+        &self.verification_uri
     }
 
-    /// Returns the code the user must enter at the verification URL.
+    /// Returns the code the user must enter at the verification URI.
     #[must_use]
     pub fn user_code(&self) -> &str {
         &self.user_code
@@ -35,6 +35,7 @@ impl DeviceFlowSession {
 }
 
 /// Result of a logout operation.
+#[derive(Debug)]
 pub enum LogoutResult {
     /// Successfully logged out and token was removed.
     LoggedOut,
@@ -47,7 +48,7 @@ pub enum LogoutResult {
 /// Start the OAuth2 device authorization flow.
 ///
 /// Returns a [`DeviceFlowSession`] with information that should be displayed
-/// to the user (verification URL and user code).
+/// to the user (verification URI and user code).
 ///
 /// # Errors
 ///
@@ -67,7 +68,7 @@ pub async fn start_login(client: &crate::client::Client) -> Result<DeviceFlowSes
     .await?;
 
     Ok(DeviceFlowSession {
-        verification_url: device_response.verification_url,
+        verification_uri: device_response.verification_uri,
         user_code: device_response.user_code,
         device_code: device_response.device_code,
         interval: device_response.interval,

@@ -19,7 +19,7 @@ struct DeviceCodeRequest<'a> {
 pub(super) struct DeviceCodeResponse {
     pub(super) device_code: String,
     pub(super) user_code: String,
-    pub(super) verification_url: String,
+    pub(super) verification_uri: String,
     pub(super) expires_in: u64,
     pub(super) interval: u64,
 }
@@ -52,7 +52,7 @@ struct TokenErrorResponse {
 
 /// Start the device authorization flow
 ///
-/// Returns a [`DeviceCodeResponse`] containing `user_code` and `verification_url`.
+/// Returns a [`DeviceCodeResponse`] containing `user_code` and `verification_uri`.
 ///
 /// # Errors
 ///
@@ -189,7 +189,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "device_code": "test-device-code",
                 "user_code": "ABCD-EFGH",
-                "verification_url": "https://www.google.com/device",
+                "verification_uri": "https://www.google.com/device",
                 "expires_in": 1800,
                 "interval": 5
             })))
@@ -204,7 +204,7 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.device_code, "test-device-code");
         assert_eq!(response.user_code, "ABCD-EFGH");
-        assert_eq!(response.verification_url, "https://www.google.com/device");
+        assert_eq!(response.verification_uri, "https://www.google.com/device");
         assert_eq!(response.expires_in, 1800);
         assert_eq!(response.interval, 5);
     }
