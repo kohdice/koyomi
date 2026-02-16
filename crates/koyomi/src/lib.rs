@@ -49,9 +49,9 @@ pub async fn run() -> Result<()> {
             let client = koyomi_core::Client::new()?;
             handle_logout(&client, cli.quiet).await
         }
-        Some(Commands::Events { period, calendar, details, limit }) => {
+        Some(Commands::Events { period, details, limit }) => {
             let client = koyomi_core::Client::new()?;
-            handle_events(&client, period, calendar, details, limit, tz).await
+            handle_events(&client, period, cli.calendar, details, limit, tz).await
         }
     }
 }

@@ -25,7 +25,8 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Calendar ID (default: primary)
-    #[arg(short, long, default_value = "primary", global = true)]
+    #[arg(short, long, default_value = "primary", global = true,
+          value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub calendar: String,
 
     /// Timezone for time range calculation (default: system timezone)
@@ -62,10 +63,6 @@ pub enum Commands {
         /// Period: d(ay), w(eek), m(onth)
         #[arg(short, long, value_enum, default_value = "day")]
         period: Period,
-        /// Calendar ID (default: primary)
-        #[arg(short, long, default_value = "primary",
-              value_parser = clap::builder::NonEmptyStringValueParser::new())]
-        calendar: String,
         /// Show detailed event information
         #[arg(short, long)]
         details: bool,
@@ -103,9 +100,9 @@ mod tests {
     fn cli_parses_events_command_with_defaults() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Day);
-                assert_eq!(calendar, "primary");
+                assert_eq!(cli.calendar, "primary");
                 assert!(!details);
                 assert_eq!(limit, 250);
             }
@@ -138,9 +135,9 @@ mod tests {
             "100",
         ]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Month);
-                assert_eq!(calendar, "work@example.com");
+                assert_eq!(cli.calendar, "work@example.com");
                 assert!(details);
                 assert_eq!(limit, 100);
             }
@@ -162,9 +159,9 @@ mod tests {
             "50",
         ]);
         match cli.command {
-            Some(Commands::Events { period, calendar, details, limit }) => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Month);
-                assert_eq!(calendar, "test@example.com");
+                assert_eq!(cli.calendar, "test@example.com");
                 assert!(details);
                 assert_eq!(limit, 50);
             }
