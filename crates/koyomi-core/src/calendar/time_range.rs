@@ -33,11 +33,7 @@ impl TimeZone {
     pub fn today(self) -> NaiveDate {
         match self {
             Self::Local => chrono::Local::now().date_naive(),
-            Self::Jst => {
-                let offset = FixedOffset::east_opt(9 * 3600).expect("JST offset is always valid");
-                chrono::Utc::now().with_timezone(&offset).date_naive()
-            }
-            Self::Utc => chrono::Utc::now().date_naive(),
+            _ => chrono::Utc::now().with_timezone(&self.fixed_offset()).date_naive(),
         }
     }
 }
@@ -50,14 +46,11 @@ fn midnight_to_utc(base: NaiveDate, tz: TimeZone) -> Result<DateTime<Utc>> {
         TimeZone::Local => {
             midnight.and_local_timezone(Local).single().ok_or_else(err)?.with_timezone(&Utc)
         }
-        TimeZone::Jst => {
-            let offset = FixedOffset::east_opt(9 * 3600).expect("JST offset is always valid");
-            midnight.and_local_timezone(offset).single().ok_or_else(err)?.with_timezone(&Utc)
-        }
-        TimeZone::Utc => {
-            let offset = FixedOffset::east_opt(0).expect("UTC offset is always valid");
-            midnight.and_local_timezone(offset).single().ok_or_else(err)?.with_timezone(&Utc)
-        }
+        _ => midnight
+            .and_local_timezone(tz.fixed_offset())
+            .single()
+            .ok_or_else(err)?
+            .with_timezone(&Utc),
     };
     Ok(utc)
 }

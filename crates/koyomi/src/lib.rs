@@ -33,24 +33,17 @@ pub async fn run() -> Result<()> {
     init_tracing(cli.verbose)?;
 
     let tz = cli.timezone.unwrap_or_default();
+    let client = koyomi_core::Client::new()?;
 
     match cli.command {
         None => {
-            let client = koyomi_core::Client::new()?;
             let token = koyomi_core::get_valid_token(&client).await?;
             koyomi_ui::tui::run(client, token, cli.calendar, tz).await?;
             Ok(())
         }
-        Some(Commands::Login) => {
-            let client = koyomi_core::Client::new()?;
-            handle_login(&client, cli.quiet).await
-        }
-        Some(Commands::Logout) => {
-            let client = koyomi_core::Client::new()?;
-            handle_logout(&client, cli.quiet).await
-        }
+        Some(Commands::Login) => handle_login(&client, cli.quiet).await,
+        Some(Commands::Logout) => handle_logout(&client, cli.quiet).await,
         Some(Commands::Events { period, details, limit }) => {
-            let client = koyomi_core::Client::new()?;
             handle_events(&client, period, cli.calendar, details, limit, tz).await
         }
     }
