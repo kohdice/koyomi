@@ -24,5 +24,31 @@ pub enum Message {
     EventsLoaded { calendar_name: String, events_by_month: HashMap<(i32, u32), Vec<Event>> },
     EventsLoadFailed { error: String },
 
+    // Delete
+    OpenDeleteConfirm,
+    ConfirmDelete,
+    CancelDelete,
+    DeleteSuccess,
+    DeleteFailed { error: String },
+
+    // Form (Add / Edit)
+    OpenAddForm,
+    OpenEditForm,
+    FormInput { ch: char },
+    FormBackspace,
+    FormDelete,
+    FormCursorLeft,
+    FormCursorRight,
+    FormCursorHome,
+    FormCursorEnd,
+    FormNextField,
+    FormPrevField,
+    FormReminderNext,
+    FormReminderPrev,
+    FormSubmit,
+    FormCancel,
+    SaveSuccess,
+    SaveFailed { error: String },
+
     Quit,
 }
