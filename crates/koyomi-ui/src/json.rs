@@ -33,6 +33,7 @@ struct SimplifiedResponse {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SimplifiedEvent {
+    id: Option<String>,
     summary: Option<String>,
     status: Option<EventStatus>,
     organizer: Option<String>,
@@ -66,6 +67,7 @@ impl From<&CalendarEvents> for SimplifiedResponse {
 impl From<&Event> for SimplifiedEvent {
     fn from(event: &Event) -> Self {
         Self {
+            id: event.id.clone(),
             summary: event.summary.clone(),
             status: event.status,
             organizer: event
@@ -125,7 +127,7 @@ mod tests {
             calendar: "Test Calendar".to_string(),
             truncated: false,
             events: vec![Event {
-                id: None,
+                id: Some("abc123def".to_string()),
                 summary: Some("Meeting".to_string()),
                 status: Some(EventStatus::Confirmed),
                 organizer: Some(Organizer {
@@ -174,6 +176,7 @@ mod tests {
 
         let value: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(value["calendar"], "Test Calendar");
+        assert_eq!(value["events"][0]["id"], "abc123def");
         assert_eq!(value["events"][0]["summary"], "Meeting");
         assert_eq!(value["events"][0]["organizer"], "Organizer");
         assert_eq!(value["events"][0]["conferenceData"]["name"], "Google Meet");
