@@ -1,11 +1,13 @@
 mod cli;
+mod commands;
 
 use anyhow::Result;
 use clap::Parser;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use crate::cli::{Cli, Commands, Period};
+use crate::cli::{Cli, Commands};
+use crate::commands::event::EventCommand;
 
 fn init_tracing(verbose: u8) -> Result<()> {
     let level = match verbose {
@@ -41,97 +43,21 @@ pub async fn run() -> Result<()> {
             koyomi_ui::tui::run(client, token, cli.calendar, tz).await?;
             Ok(())
         }
-        Some(Commands::Login) => handle_login(&client, cli.quiet).await,
-        Some(Commands::Logout) => handle_logout(&client, cli.quiet).await,
-        Some(Commands::Events { period, details, limit }) => {
-            handle_events(&client, period, cli.calendar, details, limit, tz).await
-        }
-    }
-}
-
-async fn handle_login(client: &koyomi_core::Client, quiet: bool) -> Result<()> {
-    let session = koyomi_core::start_login(client).await?;
-
-    // verification URL と user code は --quiet でも表示する（認証に必須）
-    eprintln!();
-    eprintln!("To sign in, please visit: {}", session.verification_uri());
-    eprintln!("Enter this code: {}", session.user_code());
-    eprintln!();
-
-    if let Err(e) = open::that(session.verification_uri()) {
-        tracing::warn!("Could not open browser automatically: {}", e);
-        if !quiet {
-            eprintln!("Could not open browser automatically. Please open the URL above manually.");
-        }
-    }
-
-    if !quiet {
-        eprintln!("Waiting for authorization...");
-    }
-
-    koyomi_core::complete_login(client, &session).await?;
-
-    if !quiet {
-        eprintln!();
-        eprintln!("Successfully logged in!");
-    }
-
-    Ok(())
-}
-
-async fn handle_logout(client: &koyomi_core::Client, quiet: bool) -> Result<()> {
-    match koyomi_core::logout(client).await? {
-        koyomi_core::LogoutResult::LoggedOut => {
-            if !quiet {
-                eprintln!("Successfully logged out.");
+        Some(Commands::Login) => commands::login::handle(&client, cli.quiet).await,
+        Some(Commands::Logout) => commands::logout::handle(&client, cli.quiet).await,
+        Some(Commands::Event(event_args)) => match event_args.command {
+            EventCommand::List(args) => {
+                commands::event::handle_list(&client, args, cli.calendar, tz).await
             }
-        }
-        koyomi_core::LogoutResult::LoggedOutRevocationFailed => {
-            if !quiet {
-                eprintln!(
-                    "Logged out locally, but failed to revoke the token with Google. \
-                     The token may still be valid on Google's side."
-                );
+            EventCommand::Add(args) => {
+                commands::event::handle_add(&client, args, cli.calendar).await
             }
-        }
-        koyomi_core::LogoutResult::NotLoggedIn => {
-            if !quiet {
-                eprintln!("Not currently logged in.");
+            EventCommand::Update(args) => {
+                commands::event::handle_update(&client, args, cli.calendar).await
             }
-        }
-        koyomi_core::LogoutResult::CorruptTokenRemoved => {
-            if !quiet {
-                eprintln!(
-                    "Token file was corrupt and has been removed. Please run 'koyomi login' again."
-                );
+            EventCommand::Delete(args) => {
+                commands::event::handle_delete(&client, args, cli.calendar, cli.quiet).await
             }
-        }
+        },
     }
-    Ok(())
-}
-
-async fn handle_events(
-    client: &koyomi_core::Client,
-    period: Period,
-    calendar: String,
-    details: bool,
-    limit: u32,
-    tz: koyomi_core::calendar::TimeZone,
-) -> Result<()> {
-    let token = koyomi_core::get_valid_token(client).await?;
-
-    let today = tz.today();
-    let (time_min, time_max) = match period {
-        Period::Day => koyomi_core::calendar::time_range::for_day(today, tz)?,
-        Period::Week => koyomi_core::calendar::time_range::for_week(today, tz)?,
-        Period::Month => koyomi_core::calendar::time_range::for_month(today, tz)?,
-    };
-    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, time_min, time_max, limit)?;
-
-    let events = client.list_events(&token, &config).await?;
-
-    let mut stdout = std::io::stdout().lock();
-    koyomi_ui::json::render(&mut stdout, &events, details)?;
-
-    Ok(())
 }

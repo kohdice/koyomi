@@ -1,4 +1,6 @@
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand};
+
+use crate::commands::event::EventArgs;
 
 const ABOUT: &str = "Command line interface for Koyomi, a calendar tool.";
 const LONG_ABOUT: &str = r#"Command line interface for Koyomi, a calendar tool.
@@ -37,50 +39,20 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
-/// Time period for event listing
-#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Period {
-    /// Today's events
-    #[default]
-    #[value(alias = "d")]
-    Day,
-    /// This week's events (next 7 days)
-    #[value(alias = "w")]
-    Week,
-    /// This month's events (next 1 calendar month)
-    #[value(alias = "m")]
-    Month,
-}
-
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Log in to a Google account
     Login,
     /// Log out of a Google account
     Logout,
-    /// List calendar events
-    Events {
-        /// Period: d(ay), w(eek), m(onth)
-        #[arg(short, long, value_enum, default_value = "day")]
-        period: Period,
-        /// Show detailed event information
-        #[arg(short, long)]
-        details: bool,
-        /// Maximum number of events to return (1-2500)
-        #[arg(short = 'n', long, default_value_t = 250, value_parser = clap::value_parser!(u32).range(1..=koyomi_core::calendar::MAX_RESULTS_LIMIT as i64))]
-        limit: u32,
-    },
+    /// Manage calendar events
+    Event(EventArgs),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn period_default_is_day() {
-        let period = Period::default();
-        assert_eq!(period, Period::Day);
-    }
+    use clap::Parser;
 
     #[test]
     fn cli_accepts_no_subcommand_for_tui_mode() {
@@ -94,79 +66,6 @@ mod tests {
         let cli = Cli::parse_from(["koyomi", "--calendar", "work@example.com"]);
         assert!(cli.command.is_none());
         assert_eq!(cli.calendar, "work@example.com");
-    }
-
-    #[test]
-    fn cli_parses_events_command_with_defaults() {
-        let cli = Cli::parse_from(["koyomi", "events"]);
-        match cli.command {
-            Some(Commands::Events { period, details, limit }) => {
-                assert_eq!(period, Period::Day);
-                assert_eq!(cli.calendar, "primary");
-                assert!(!details);
-                assert_eq!(limit, 250);
-            }
-            _ => panic!("Expected Events command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_events_command_with_period_alias() {
-        let cli = Cli::parse_from(["koyomi", "events", "-p", "w"]);
-        match cli.command {
-            Some(Commands::Events { period, .. }) => {
-                assert_eq!(period, Period::Week);
-            }
-            _ => panic!("Expected Events command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_events_command_with_all_options() {
-        let cli = Cli::parse_from([
-            "koyomi",
-            "events",
-            "--period",
-            "month",
-            "--calendar",
-            "work@example.com",
-            "--details",
-            "--limit",
-            "100",
-        ]);
-        match cli.command {
-            Some(Commands::Events { period, details, limit }) => {
-                assert_eq!(period, Period::Month);
-                assert_eq!(cli.calendar, "work@example.com");
-                assert!(details);
-                assert_eq!(limit, 100);
-            }
-            _ => panic!("Expected Events command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_events_command_with_short_options() {
-        let cli = Cli::parse_from([
-            "koyomi",
-            "events",
-            "-p",
-            "m",
-            "-c",
-            "test@example.com",
-            "-d",
-            "-n",
-            "50",
-        ]);
-        match cli.command {
-            Some(Commands::Events { period, details, limit }) => {
-                assert_eq!(period, Period::Month);
-                assert_eq!(cli.calendar, "test@example.com");
-                assert!(details);
-                assert_eq!(limit, 50);
-            }
-            _ => panic!("Expected Events command"),
-        }
     }
 
     #[test]
@@ -184,43 +83,43 @@ mod tests {
 
     #[test]
     fn cli_quiet_conflicts_with_verbose() {
-        let result = Cli::try_parse_from(["koyomi", "-q", "-v", "events"]);
+        let result = Cli::try_parse_from(["koyomi", "-q", "-v", "event", "list"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn cli_defaults_quiet_to_false() {
-        let cli = Cli::parse_from(["koyomi", "events"]);
+        let cli = Cli::parse_from(["koyomi", "event", "list"]);
         assert!(!cli.quiet);
     }
 
     #[test]
     fn cli_parses_timezone_jst() {
-        let cli = Cli::parse_from(["koyomi", "--timezone", "JST", "events"]);
+        let cli = Cli::parse_from(["koyomi", "--timezone", "JST", "event", "list"]);
         assert_eq!(cli.timezone, Some(koyomi_core::calendar::TimeZone::Jst));
     }
 
     #[test]
     fn cli_parses_timezone_utc() {
-        let cli = Cli::parse_from(["koyomi", "--timezone", "UTC", "events"]);
+        let cli = Cli::parse_from(["koyomi", "--timezone", "UTC", "event", "list"]);
         assert_eq!(cli.timezone, Some(koyomi_core::calendar::TimeZone::Utc));
     }
 
     #[test]
     fn cli_timezone_default_is_none() {
-        let cli = Cli::parse_from(["koyomi", "events"]);
+        let cli = Cli::parse_from(["koyomi", "event", "list"]);
         assert!(cli.timezone.is_none());
     }
 
     #[test]
     fn cli_timezone_rejects_lowercase() {
-        let result = Cli::try_parse_from(["koyomi", "--timezone", "utc", "events"]);
+        let result = Cli::try_parse_from(["koyomi", "--timezone", "utc", "event", "list"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn cli_timezone_rejects_mixed_case() {
-        let result = Cli::try_parse_from(["koyomi", "--timezone", "Utc", "events"]);
+        let result = Cli::try_parse_from(["koyomi", "--timezone", "Utc", "event", "list"]);
         assert!(result.is_err());
     }
 }
