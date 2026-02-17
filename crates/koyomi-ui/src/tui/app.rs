@@ -12,7 +12,7 @@ use tracing::debug;
 use super::calendar_grid;
 use super::event_handler;
 use super::message::Message;
-use super::model::Model;
+use super::model::{Model, PendingAction};
 use super::update::update;
 use super::view::view;
 
@@ -27,6 +27,7 @@ pub(super) struct App {
     client: koyomi_core::Client,
     token: koyomi_core::StoredToken,
     fetch_in_progress: bool,
+    api_in_progress: bool,
 }
 
 impl App {
@@ -43,6 +44,7 @@ impl App {
             client,
             token,
             fetch_in_progress: false,
+            api_in_progress: false,
         }
     }
 
@@ -122,6 +124,16 @@ impl App {
                 self.fetch_in_progress = false;
             }
 
+            if matches!(
+                &m,
+                Message::DeleteSuccess
+                    | Message::DeleteFailed { .. }
+                    | Message::SaveSuccess
+                    | Message::SaveFailed { .. }
+            ) {
+                self.api_in_progress = false;
+            }
+
             msg = update(&mut self.model, m);
 
             if should_fetch && !self.fetch_in_progress {
@@ -131,6 +143,23 @@ impl App {
                     self.model.current_month,
                     tx.clone(),
                 );
+            }
+
+            if let Some(action) = self.model.pending_action.take()
+                && !self.api_in_progress
+            {
+                self.api_in_progress = true;
+                match action {
+                    PendingAction::Delete { event_id } => {
+                        self.spawn_delete_event(event_id, tx.clone());
+                    }
+                    PendingAction::Insert { body } => {
+                        self.spawn_insert_event(body, tx.clone());
+                    }
+                    PendingAction::Patch { event_id, body } => {
+                        self.spawn_patch_event(event_id, body, tx.clone());
+                    }
+                }
             }
         }
     }
@@ -205,6 +234,98 @@ impl App {
                     if tx.send(Message::EventsLoadFailed { error: format!("{e:#}") }).is_err() {
                         debug!("Message channel closed; dropping EventsLoadFailed");
                     }
+                }
+            }
+        });
+    }
+
+    fn spawn_delete_event(&self, event_id: String, tx: mpsc::UnboundedSender<Message>) {
+        let client = self.client.clone();
+        let token = self.token.clone();
+        let calendar_id = self.model.calendar_id.clone();
+
+        debug!("Spawning delete event: {event_id}");
+
+        tokio::spawn(async move {
+            let config = match koyomi_core::calendar::DeleteEventConfig::new(calendar_id, event_id)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Message::DeleteFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
+            match client.delete_event(&token, &config).await {
+                Ok(()) => {
+                    let _ = tx.send(Message::DeleteSuccess);
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::DeleteFailed { error: format!("{e:#}") });
+                }
+            }
+        });
+    }
+
+    fn spawn_insert_event(
+        &self,
+        body: koyomi_core::calendar::InsertEventBody,
+        tx: mpsc::UnboundedSender<Message>,
+    ) {
+        let client = self.client.clone();
+        let token = self.token.clone();
+        let calendar_id = self.model.calendar_id.clone();
+
+        debug!("Spawning insert event: {}", body.summary);
+
+        tokio::spawn(async move {
+            let config = match koyomi_core::calendar::InsertEventConfig::new(calendar_id, body) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
+            match client.insert_event(&token, &config).await {
+                Ok(_) => {
+                    let _ = tx.send(Message::SaveSuccess);
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
+                }
+            }
+        });
+    }
+
+    fn spawn_patch_event(
+        &self,
+        event_id: String,
+        body: koyomi_core::calendar::PatchEventBody,
+        tx: mpsc::UnboundedSender<Message>,
+    ) {
+        let client = self.client.clone();
+        let token = self.token.clone();
+        let calendar_id = self.model.calendar_id.clone();
+
+        debug!("Spawning patch event: {event_id}");
+
+        tokio::spawn(async move {
+            let config =
+                match koyomi_core::calendar::PatchEventConfig::new(calendar_id, event_id, body) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
+                        return;
+                    }
+                };
+
+            match client.patch_event(&token, &config).await {
+                Ok(_) => {
+                    let _ = tx.send(Message::SaveSuccess);
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
                 }
             }
         });

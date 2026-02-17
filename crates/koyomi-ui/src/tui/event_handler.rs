@@ -1,11 +1,19 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::message::Message;
-use super::model::{Focus, Model};
+use super::model::{Focus, FormField, Model};
 
 pub(super) fn handle_key_event(model: &Model, key: KeyEvent) -> Option<Message> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Some(Message::Quit);
+    }
+
+    if model.delete_confirm.is_some() {
+        return handle_delete_confirm_key(key);
+    }
+
+    if model.event_form.is_some() {
+        return handle_form_key(model, key);
     }
 
     if model.event_modal_open {
@@ -26,6 +34,7 @@ fn handle_calendar_key(key: KeyEvent) -> Option<Message> {
         KeyCode::Char('p') => Some(Message::PrevMonth),
         KeyCode::Char('t') => Some(Message::GoToToday),
         KeyCode::Char('r') => Some(Message::RefreshEvents),
+        KeyCode::Char('a') => Some(Message::OpenAddForm),
         KeyCode::Enter => Some(Message::OpenEventModal),
         _ => None,
     }
@@ -35,6 +44,8 @@ fn handle_event_modal_key(model: &Model, key: KeyEvent) -> Option<Message> {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Some(Message::CloseEventModal),
         KeyCode::Tab => Some(Message::ModalToggleFocus),
+        KeyCode::Char('d') => Some(Message::OpenDeleteConfirm),
+        KeyCode::Char('e') => Some(Message::OpenEditForm),
         _ => match model.focus {
             Focus::EventList => handle_modal_event_list_key(key),
             Focus::EventDetail => handle_modal_detail_key(key),
@@ -55,6 +66,39 @@ fn handle_modal_detail_key(key: KeyEvent) -> Option<Message> {
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => Some(Message::DetailScrollDown),
         KeyCode::Char('k') | KeyCode::Up => Some(Message::DetailScrollUp),
+        _ => None,
+    }
+}
+
+fn handle_delete_confirm_key(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Char('y') => Some(Message::ConfirmDelete),
+        KeyCode::Char('n') | KeyCode::Esc => Some(Message::CancelDelete),
+        _ => None,
+    }
+}
+
+fn handle_form_key(model: &Model, key: KeyEvent) -> Option<Message> {
+    let is_selector =
+        model.event_form.as_ref().is_some_and(|f| f.focused_field == FormField::Reminders);
+
+    match key.code {
+        KeyCode::Esc => Some(Message::FormCancel),
+        KeyCode::Enter => Some(Message::FormSubmit),
+        KeyCode::Tab => Some(Message::FormNextField),
+        KeyCode::BackTab => Some(Message::FormPrevField),
+        _ if is_selector => match key.code {
+            KeyCode::Up => Some(Message::FormReminderPrev),
+            KeyCode::Down => Some(Message::FormReminderNext),
+            _ => None,
+        },
+        KeyCode::Backspace => Some(Message::FormBackspace),
+        KeyCode::Delete => Some(Message::FormDelete),
+        KeyCode::Left => Some(Message::FormCursorLeft),
+        KeyCode::Right => Some(Message::FormCursorRight),
+        KeyCode::Home => Some(Message::FormCursorHome),
+        KeyCode::End => Some(Message::FormCursorEnd),
+        KeyCode::Char(ch) => Some(Message::FormInput { ch }),
         _ => None,
     }
 }

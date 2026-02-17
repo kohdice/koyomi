@@ -19,4 +19,12 @@ pub fn view(model: &Model, f: &mut Frame) {
     if model.event_modal_open {
         widget::event_modal::render(f, model);
     }
+
+    if model.delete_confirm.is_some() {
+        widget::delete_confirm::render(f, model);
+    }
+
+    if model.event_form.is_some() {
+        widget::event_form::render(f, model);
+    }
 }

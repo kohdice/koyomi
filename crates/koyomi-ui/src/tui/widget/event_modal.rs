@@ -65,6 +65,8 @@ fn render_help_bar(f: &mut Frame, area: Rect, model: &Model) {
 
     spans.extend(help_entry("Tab", "switch pane"));
     spans.extend(help_entry("j/k", "navigate"));
+    spans.extend(help_entry("d", "delete"));
+    spans.extend(help_entry("e", "edit"));
 
     if model.focus == Focus::EventDetail {
         spans.extend(help_entry("g/G", "top/bottom"));

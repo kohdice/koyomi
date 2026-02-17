@@ -13,8 +13,13 @@ pub fn render(f: &mut Frame, area: Rect, model: &Model) {
     spans.extend(help_entry("n/p", "month"));
     spans.extend(help_entry("t", "today"));
     spans.extend(help_entry("Enter", "events"));
+    spans.extend(help_entry("a", "add"));
     spans.extend(help_entry("r", "refresh"));
     spans.extend(help_entry("q", "quit"));
+
+    if let Some(status) = &model.status_message {
+        spans.push(Span::styled(format!(" | {status}"), theme::HELP_KEY));
+    }
 
     if let Some(err) = &model.error_message {
         spans.push(Span::styled(format!(" | Error: {err}"), theme::ERROR_STYLE));

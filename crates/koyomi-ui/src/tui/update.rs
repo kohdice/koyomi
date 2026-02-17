@@ -1,8 +1,13 @@
 use chrono::{Datelike, NaiveDate, TimeDelta};
+use koyomi_core::calendar::{EventDateTime, EventStatus, parse_attendees};
 
 use super::calendar_grid;
 use super::message::Message;
-use super::model::{Focus, Model};
+use super::model::{
+    DEFAULT_REMINDER_PRESET_INDEX, DeleteConfirmState, EventFormState, Focus, FormField, FormMode,
+    Model, PendingAction, REMINDER_PRESETS, reminder_preset_index_from,
+};
+use super::text_input::TextInput;
 
 pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
     match msg {
@@ -119,6 +124,304 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
             model.error_message = Some(error);
             None
         }
+
+        // --- Delete ---
+        Message::OpenDeleteConfirm => {
+            if let Some(event) = model.selected_event() {
+                let event_id = event.id.clone().unwrap_or_default();
+                let event_summary =
+                    event.summary.clone().unwrap_or_else(|| "(No title)".to_string());
+                if !event_id.is_empty() {
+                    model.delete_confirm = Some(DeleteConfirmState { event_id, event_summary });
+                }
+            }
+            None
+        }
+        Message::ConfirmDelete => {
+            if let Some(state) = model.delete_confirm.take() {
+                model.pending_action = Some(PendingAction::Delete { event_id: state.event_id });
+                model.status_message = Some("Deleting...".to_string());
+            }
+            None
+        }
+        Message::CancelDelete => {
+            model.delete_confirm = None;
+            None
+        }
+        Message::DeleteSuccess => {
+            model.status_message = None;
+            model.event_modal_open = false;
+            model.focus = Focus::Calendar;
+            model.event_list_index = 0;
+            model.detail_scroll_offset = 0;
+            Some(Message::RefreshEvents)
+        }
+        Message::DeleteFailed { error } => {
+            model.status_message = None;
+            model.error_message = Some(error);
+            None
+        }
+
+        // --- Form (Add / Edit) ---
+        Message::OpenAddForm => {
+            let date_str = model.selected_date.format("%Y-%m-%d").to_string();
+            model.event_form = Some(EventFormState {
+                mode: FormMode::Add,
+                fields: [
+                    TextInput::new(""),
+                    TextInput::new(&date_str),
+                    TextInput::new(&date_str),
+                    TextInput::new(""),
+                    TextInput::new(""),
+                    TextInput::new("confirmed"),
+                    TextInput::new(""),
+                    TextInput::new(REMINDER_PRESETS[DEFAULT_REMINDER_PRESET_INDEX].label),
+                ],
+                focused_field: FormField::Summary,
+                validation_error: None,
+                reminder_preset_index: DEFAULT_REMINDER_PRESET_INDEX,
+            });
+            None
+        }
+        Message::OpenEditForm => {
+            if let Some(event) = model.selected_event() {
+                let event_id = event.id.clone().unwrap_or_default();
+                if event_id.is_empty() {
+                    return None;
+                }
+                let summary = event.summary.clone().unwrap_or_default();
+                let start_str =
+                    event.start.as_ref().map(|s| s.to_display_string()).unwrap_or_default();
+                let end_str = event.end.as_ref().map(|e| e.to_display_string()).unwrap_or_default();
+                let description = event.description.clone().unwrap_or_default();
+                let location = event.location.clone().unwrap_or_default();
+
+                let status_str =
+                    event.status.as_ref().map(|s| s.as_str().to_string()).unwrap_or_default();
+
+                let attendees_str = event
+                    .attendees
+                    .iter()
+                    .filter(|a| !a.resource)
+                    .filter_map(|a| a.email.as_deref())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let preset_idx = reminder_preset_index_from(&event.reminders);
+
+                model.event_form = Some(EventFormState {
+                    mode: FormMode::Edit { event_id },
+                    fields: [
+                        TextInput::new(&summary),
+                        TextInput::new(&start_str),
+                        TextInput::new(&end_str),
+                        TextInput::new(&description),
+                        TextInput::new(&location),
+                        TextInput::new(&status_str),
+                        TextInput::new(&attendees_str),
+                        TextInput::new(REMINDER_PRESETS[preset_idx].label),
+                    ],
+                    focused_field: FormField::Summary,
+                    validation_error: None,
+                    reminder_preset_index: preset_idx,
+                });
+            }
+            None
+        }
+        Message::FormInput { ch } => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].insert(ch);
+                form.validation_error = None;
+            }
+            None
+        }
+        Message::FormBackspace => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].backspace();
+                form.validation_error = None;
+            }
+            None
+        }
+        Message::FormDelete => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].delete();
+            }
+            None
+        }
+        Message::FormCursorLeft => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].move_left();
+            }
+            None
+        }
+        Message::FormCursorRight => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].move_right();
+            }
+            None
+        }
+        Message::FormCursorHome => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].home();
+            }
+            None
+        }
+        Message::FormCursorEnd => {
+            if let Some(form) = &mut model.event_form {
+                let idx = field_index(&form.focused_field);
+                form.fields[idx].end();
+            }
+            None
+        }
+        Message::FormNextField => {
+            if let Some(form) = &mut model.event_form {
+                form.focused_field = form.focused_field.next();
+            }
+            None
+        }
+        Message::FormPrevField => {
+            if let Some(form) = &mut model.event_form {
+                form.focused_field = form.focused_field.prev();
+            }
+            None
+        }
+        Message::FormSubmit => {
+            if let Some(form) = &mut model.event_form {
+                let summary = form.fields[0].content().trim().to_string();
+                let start_str = form.fields[1].content().trim().to_string();
+                let end_str = form.fields[2].content().trim().to_string();
+                let description = form.fields[3].content().trim().to_string();
+                let location = form.fields[4].content().trim().to_string();
+                let status_str = form.fields[5].content().trim().to_string();
+                let attendees_str = form.fields[6].content().trim().to_string();
+
+                if summary.is_empty() {
+                    form.validation_error = Some("Summary is required".to_string());
+                    return None;
+                }
+
+                let start = match EventDateTime::parse(&start_str) {
+                    Ok(dt) => dt,
+                    Err(e) => {
+                        form.validation_error = Some(e);
+                        return None;
+                    }
+                };
+                let end = match EventDateTime::parse(&end_str) {
+                    Ok(dt) => dt,
+                    Err(e) => {
+                        form.validation_error = Some(e);
+                        return None;
+                    }
+                };
+
+                let desc = if description.is_empty() { None } else { Some(description) };
+                let loc = if location.is_empty() { None } else { Some(location) };
+
+                let status = if status_str.is_empty() {
+                    None
+                } else {
+                    match EventStatus::parse(&status_str) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            form.validation_error = Some(e);
+                            return None;
+                        }
+                    }
+                };
+
+                let attendees = parse_attendees(&attendees_str);
+
+                let reminders = REMINDER_PRESETS[form.reminder_preset_index].to_reminders();
+
+                match &form.mode {
+                    FormMode::Add => {
+                        let body = koyomi_core::calendar::InsertEventBody {
+                            summary,
+                            start,
+                            end,
+                            description: desc,
+                            location: loc,
+                            status,
+                            attendees,
+                            reminders,
+                        };
+                        model.pending_action = Some(PendingAction::Insert { body });
+                    }
+                    FormMode::Edit { event_id } => {
+                        let attendees_opt =
+                            if attendees_str.is_empty() { None } else { Some(attendees) };
+                        let body = koyomi_core::calendar::PatchEventBody {
+                            summary: Some(summary),
+                            start: Some(start),
+                            end: Some(end),
+                            description: desc,
+                            location: loc,
+                            status,
+                            attendees: attendees_opt,
+                            reminders,
+                        };
+                        model.pending_action =
+                            Some(PendingAction::Patch { event_id: event_id.clone(), body });
+                    }
+                }
+                model.event_form = None;
+                model.status_message = Some("Saving...".to_string());
+            }
+            None
+        }
+        Message::FormReminderNext => {
+            if let Some(form) = &mut model.event_form {
+                let len = REMINDER_PRESETS.len();
+                form.reminder_preset_index = (form.reminder_preset_index + 1) % len;
+                form.fields[7] = TextInput::new(REMINDER_PRESETS[form.reminder_preset_index].label);
+            }
+            None
+        }
+        Message::FormReminderPrev => {
+            if let Some(form) = &mut model.event_form {
+                let len = REMINDER_PRESETS.len();
+                form.reminder_preset_index = (form.reminder_preset_index + len - 1) % len;
+                form.fields[7] = TextInput::new(REMINDER_PRESETS[form.reminder_preset_index].label);
+            }
+            None
+        }
+        Message::FormCancel => {
+            model.event_form = None;
+            None
+        }
+        Message::SaveSuccess => {
+            model.status_message = None;
+            model.event_modal_open = false;
+            model.focus = Focus::Calendar;
+            model.event_list_index = 0;
+            model.detail_scroll_offset = 0;
+            Some(Message::RefreshEvents)
+        }
+        Message::SaveFailed { error } => {
+            model.status_message = None;
+            model.error_message = Some(error);
+            None
+        }
+    }
+}
+
+fn field_index(field: &FormField) -> usize {
+    match field {
+        FormField::Summary => 0,
+        FormField::Start => 1,
+        FormField::End => 2,
+        FormField::Description => 3,
+        FormField::Location => 4,
+        FormField::Status => 5,
+        FormField::Attendees => 6,
+        FormField::Reminders => 7,
     }
 }
 
