@@ -13,4 +13,4 @@ pub use types::{
     Event, EventDateTime, EventStatus, Organizer, ReminderMethod, ReminderOverride, Reminders,
     ResponseStatus,
 };
-pub use types::{InsertEventBody, PatchEventBody};
+pub use types::{InsertEventBody, PatchEventBody, parse_attendees, parse_reminders};

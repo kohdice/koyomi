@@ -1113,6 +1113,9 @@ mod tests {
             end: sample_event_datetime(),
             description: None,
             location: None,
+            status: None,
+            attendees: Vec::new(),
+            reminders: None,
         };
         let result = InsertEventConfig::new("primary".to_string(), body);
         assert!(result.is_err());
@@ -1237,6 +1240,9 @@ mod tests {
             },
             description: None,
             location: None,
+            status: None,
+            attendees: Vec::new(),
+            reminders: None,
         }
     }
 

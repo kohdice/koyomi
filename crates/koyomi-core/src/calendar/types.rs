@@ -91,6 +91,27 @@ impl Serialize for EventDateTime {
 }
 
 impl EventDateTime {
+    /// Parse a user-supplied date/time string into `EventDateTime`.
+    ///
+    /// Tries RFC 3339 first (timed event), then `YYYY-MM-DD` (all-day event).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message if the input matches neither format.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Ok(EventDateTime::DateTime { date_time: dt, time_zone: None });
+        }
+
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            return Ok(EventDateTime::Date { date });
+        }
+
+        Err(format!(
+            "invalid date/time '{s}': expected RFC 3339 (e.g. 2026-02-17T10:00:00+09:00) or YYYY-MM-DD (e.g. 2026-02-17)"
+        ))
+    }
+
     /// Returns the most specific time representation as a formatted string.
     ///
     /// For timed events, returns the RFC 3339 `dateTime` value.
@@ -213,6 +234,85 @@ impl EventStatus {
             EventStatus::Unknown => "unknown",
         }
     }
+
+    /// Parse a status string (case-insensitive) into `EventStatus`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message if the input is not a recognized status value.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "confirmed" => Ok(EventStatus::Confirmed),
+            "tentative" => Ok(EventStatus::Tentative),
+            "cancelled" => Ok(EventStatus::Cancelled),
+            _ => Err(format!(
+                "invalid status '{s}': expected 'confirmed', 'tentative', or 'cancelled'"
+            )),
+        }
+    }
+}
+
+/// Parse a comma-separated list of email addresses into `Vec<Attendee>`.
+///
+/// Each email is trimmed of whitespace. Empty input returns an empty Vec.
+pub fn parse_attendees(s: &str) -> Vec<Attendee> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    trimmed
+        .split(',')
+        .map(|email| Attendee {
+            email: Some(email.trim().to_string()),
+            display_name: None,
+            response_status: None,
+            resource: false,
+        })
+        .collect()
+}
+
+/// Parse a reminders string into `Reminders`.
+///
+/// Accepts `"default"` (or empty) for default reminders,
+/// or `"method:minutes,method:minutes"` format for overrides
+/// (e.g. `"popup:10,email:1440"`).
+///
+/// # Errors
+///
+/// Returns an error message if the format is invalid.
+pub fn parse_reminders(s: &str) -> Result<Reminders, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        return Ok(Reminders { use_default: true, overrides: Vec::new() });
+    }
+
+    let mut overrides = Vec::new();
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        let Some((method_str, minutes_str)) = part.split_once(':') else {
+            return Err(format!(
+                "invalid reminder '{part}': expected 'method:minutes' (e.g. 'popup:10')"
+            ));
+        };
+
+        let method = match method_str.trim().to_lowercase().as_str() {
+            "popup" => ReminderMethod::Popup,
+            "email" => ReminderMethod::Email,
+            other => {
+                return Err(format!(
+                    "invalid reminder method '{other}': expected 'popup' or 'email'"
+                ));
+            }
+        };
+
+        let minutes: i32 = minutes_str.trim().parse().map_err(|_| {
+            format!("invalid minutes '{minutes_str}': expected a number (e.g. 10, 1440)")
+        })?;
+
+        overrides.push(ReminderOverride { method, minutes });
+    }
+
+    Ok(Reminders { use_default: false, overrides })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,6 +324,12 @@ pub struct InsertEventBody {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<EventStatus>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attendees: Vec<Attendee>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reminders: Option<Reminders>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -238,6 +344,12 @@ pub struct PatchEventBody {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<EventStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attendees: Option<Vec<Attendee>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reminders: Option<Reminders>,
 }
 
 impl PatchEventBody {
@@ -248,6 +360,9 @@ impl PatchEventBody {
             || self.end.is_some()
             || self.description.is_some()
             || self.location.is_some()
+            || self.status.is_some()
+            || self.attendees.is_some()
+            || self.reminders.is_some()
     }
 }
 
@@ -268,6 +383,54 @@ pub enum ResponseStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_date_time_parse_rfc3339() {
+        let result = EventDateTime::parse("2026-02-17T10:00:00+09:00");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EventDateTime::DateTime { date_time, time_zone } => {
+                assert_eq!(
+                    date_time,
+                    chrono::DateTime::parse_from_rfc3339("2026-02-17T10:00:00+09:00").unwrap()
+                );
+                assert!(time_zone.is_none());
+            }
+            EventDateTime::Date { .. } => panic!("Expected DateTime variant"),
+        }
+    }
+
+    #[test]
+    fn event_date_time_parse_date_only() {
+        let result = EventDateTime::parse("2026-02-17");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            EventDateTime::Date { date } => {
+                assert_eq!(date, chrono::NaiveDate::from_ymd_opt(2026, 2, 17).unwrap());
+            }
+            EventDateTime::DateTime { .. } => panic!("Expected Date variant"),
+        }
+    }
+
+    #[test]
+    fn event_date_time_parse_rfc3339_utc() {
+        let result = EventDateTime::parse("2026-02-17T01:00:00Z");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), EventDateTime::DateTime { .. }));
+    }
+
+    #[test]
+    fn event_date_time_parse_rejects_invalid() {
+        let result = EventDateTime::parse("not-a-date");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid date/time"));
+    }
+
+    #[test]
+    fn event_date_time_parse_rejects_partial_time() {
+        let result = EventDateTime::parse("2026-02-17T10:00");
+        assert!(result.is_err());
+    }
 
     #[test]
     fn event_status_serializes_lowercase() {
@@ -592,6 +755,9 @@ mod tests {
             },
             description: None,
             location: None,
+            status: None,
+            attendees: Vec::new(),
+            reminders: None,
         };
 
         let json = serde_json::to_value(&body).unwrap();
@@ -600,6 +766,9 @@ mod tests {
         assert!(json["end"]["dateTime"].is_string());
         assert!(json.get("description").is_none());
         assert!(json.get("location").is_none());
+        assert!(json.get("status").is_none());
+        assert!(json.get("attendees").is_none());
+        assert!(json.get("reminders").is_none());
     }
 
     #[test]
@@ -614,12 +783,28 @@ mod tests {
             },
             description: Some("A description".to_string()),
             location: Some("Room A".to_string()),
+            status: Some(EventStatus::Tentative),
+            attendees: vec![Attendee {
+                email: Some("user@example.com".to_string()),
+                display_name: None,
+                response_status: None,
+                resource: false,
+            }],
+            reminders: Some(Reminders {
+                use_default: false,
+                overrides: vec![ReminderOverride { method: ReminderMethod::Popup, minutes: 10 }],
+            }),
         };
 
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["description"], "A description");
         assert_eq!(json["location"], "Room A");
         assert_eq!(json["start"]["date"], "2026-02-17");
+        assert_eq!(json["status"], "tentative");
+        assert_eq!(json["attendees"][0]["email"], "user@example.com");
+        assert_eq!(json["reminders"]["useDefault"], false);
+        assert_eq!(json["reminders"]["overrides"][0]["method"], "popup");
+        assert_eq!(json["reminders"]["overrides"][0]["minutes"], 10);
     }
 
     #[test]
@@ -654,5 +839,150 @@ mod tests {
         let with_location =
             PatchEventBody { location: Some("Room".to_string()), ..Default::default() };
         assert!(with_location.has_fields());
+
+        let with_status =
+            PatchEventBody { status: Some(EventStatus::Tentative), ..Default::default() };
+        assert!(with_status.has_fields());
+
+        let with_attendees = PatchEventBody { attendees: Some(vec![]), ..Default::default() };
+        assert!(with_attendees.has_fields());
+
+        let with_reminders = PatchEventBody {
+            reminders: Some(Reminders { use_default: true, overrides: vec![] }),
+            ..Default::default()
+        };
+        assert!(with_reminders.has_fields());
+    }
+
+    // --- EventStatus::parse tests ---
+
+    #[test]
+    fn event_status_parse_confirmed() {
+        assert_eq!(EventStatus::parse("confirmed").unwrap(), EventStatus::Confirmed);
+    }
+
+    #[test]
+    fn event_status_parse_tentative() {
+        assert_eq!(EventStatus::parse("tentative").unwrap(), EventStatus::Tentative);
+    }
+
+    #[test]
+    fn event_status_parse_cancelled() {
+        assert_eq!(EventStatus::parse("cancelled").unwrap(), EventStatus::Cancelled);
+    }
+
+    #[test]
+    fn event_status_parse_case_insensitive() {
+        assert_eq!(EventStatus::parse("CONFIRMED").unwrap(), EventStatus::Confirmed);
+        assert_eq!(EventStatus::parse("Tentative").unwrap(), EventStatus::Tentative);
+        assert_eq!(EventStatus::parse("CANCELLED").unwrap(), EventStatus::Cancelled);
+    }
+
+    #[test]
+    fn event_status_parse_rejects_invalid() {
+        let result = EventStatus::parse("invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid status"));
+    }
+
+    // --- parse_attendees tests ---
+
+    #[test]
+    fn parse_attendees_single_email() {
+        let attendees = parse_attendees("user@example.com");
+        assert_eq!(attendees.len(), 1);
+        assert_eq!(attendees[0].email, Some("user@example.com".to_string()));
+        assert!(!attendees[0].resource);
+    }
+
+    #[test]
+    fn parse_attendees_multiple_emails() {
+        let attendees = parse_attendees("a@x.com, b@y.com, c@z.com");
+        assert_eq!(attendees.len(), 3);
+        assert_eq!(attendees[0].email, Some("a@x.com".to_string()));
+        assert_eq!(attendees[1].email, Some("b@y.com".to_string()));
+        assert_eq!(attendees[2].email, Some("c@z.com".to_string()));
+    }
+
+    #[test]
+    fn parse_attendees_empty_string() {
+        let attendees = parse_attendees("");
+        assert!(attendees.is_empty());
+    }
+
+    #[test]
+    fn parse_attendees_whitespace_only() {
+        let attendees = parse_attendees("   ");
+        assert!(attendees.is_empty());
+    }
+
+    #[test]
+    fn parse_attendees_trims_whitespace() {
+        let attendees = parse_attendees("  a@x.com ,  b@y.com  ");
+        assert_eq!(attendees.len(), 2);
+        assert_eq!(attendees[0].email, Some("a@x.com".to_string()));
+        assert_eq!(attendees[1].email, Some("b@y.com".to_string()));
+    }
+
+    // --- parse_reminders tests ---
+
+    #[test]
+    fn parse_reminders_default() {
+        let reminders = parse_reminders("default").unwrap();
+        assert!(reminders.use_default);
+        assert!(reminders.overrides.is_empty());
+    }
+
+    #[test]
+    fn parse_reminders_default_case_insensitive() {
+        let reminders = parse_reminders("DEFAULT").unwrap();
+        assert!(reminders.use_default);
+    }
+
+    #[test]
+    fn parse_reminders_empty_string() {
+        let reminders = parse_reminders("").unwrap();
+        assert!(reminders.use_default);
+    }
+
+    #[test]
+    fn parse_reminders_single_override() {
+        let reminders = parse_reminders("popup:10").unwrap();
+        assert!(!reminders.use_default);
+        assert_eq!(reminders.overrides.len(), 1);
+        assert_eq!(reminders.overrides[0].method, ReminderMethod::Popup);
+        assert_eq!(reminders.overrides[0].minutes, 10);
+    }
+
+    #[test]
+    fn parse_reminders_multiple_overrides() {
+        let reminders = parse_reminders("popup:10,email:1440").unwrap();
+        assert!(!reminders.use_default);
+        assert_eq!(reminders.overrides.len(), 2);
+        assert_eq!(reminders.overrides[0].method, ReminderMethod::Popup);
+        assert_eq!(reminders.overrides[0].minutes, 10);
+        assert_eq!(reminders.overrides[1].method, ReminderMethod::Email);
+        assert_eq!(reminders.overrides[1].minutes, 1440);
+    }
+
+    #[test]
+    fn parse_reminders_rejects_invalid_format() {
+        let result = parse_reminders("invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expected 'method:minutes'"));
+    }
+
+    #[test]
+    fn parse_reminders_rejects_invalid_method() {
+        let result = parse_reminders("sms:10");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid reminder method"));
+    }
+
+    #[test]
+    fn parse_reminders_rejects_invalid_minutes() {
+        let result = parse_reminders("popup:abc");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid minutes"));
     }
 }
