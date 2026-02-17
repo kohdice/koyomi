@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use koyomi_core::calendar::{CalendarEvents, EntryPointType, Event, EventStatus};
+use koyomi_core::calendar::{CalendarEvents, EntryPointType, Event, EventDateTime, EventStatus};
 
 /// Renders calendar events as pretty-printed JSON.
 ///
@@ -41,6 +41,8 @@ struct SimplifiedEvent {
     end: Option<String>,
     description: Option<String>,
     attendees: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reminders: Vec<String>,
     conference_data: Option<SimplifiedConference>,
     html_link: Option<String>,
 }
@@ -71,8 +73,8 @@ impl From<&Event> for SimplifiedEvent {
                 .as_ref()
                 .and_then(|o| o.display_name.clone().or_else(|| o.email.clone())),
             location: event.location.clone(),
-            start: event.start.as_ref().map(|dt| dt.to_display_string().to_string()),
-            end: event.end.as_ref().map(|dt| dt.to_display_string().to_string()),
+            start: event.start.as_ref().map(EventDateTime::to_display_string),
+            end: event.end.as_ref().map(EventDateTime::to_display_string),
             description: event.description.clone(),
             attendees: event
                 .attendees
@@ -80,6 +82,21 @@ impl From<&Event> for SimplifiedEvent {
                 .filter(|a| !a.resource)
                 .filter_map(|a| a.display_name.clone().or_else(|| a.email.clone()))
                 .collect(),
+            reminders: event
+                .reminders
+                .as_ref()
+                .map(|r| {
+                    let mut items: Vec<String> = r
+                        .overrides
+                        .iter()
+                        .map(|o| format!("{}: {} minutes", o.method.as_str(), o.minutes))
+                        .collect();
+                    if r.use_default && items.is_empty() {
+                        items.push("calendar default".to_string());
+                    }
+                    items
+                })
+                .unwrap_or_default(),
             conference_data: event.conference_data.as_ref().and_then(|cd| {
                 cd.conference_solution.as_ref().map(|cs| SimplifiedConference {
                     name: cs.name.clone(),
@@ -118,11 +135,13 @@ mod tests {
                 }),
                 location: Some("Room A".to_string()),
                 start: Some(EventDateTime::DateTime {
-                    date_time: "2025-12-09T10:00:00+09:00".to_string(),
+                    date_time: chrono::DateTime::parse_from_rfc3339("2025-12-09T10:00:00+09:00")
+                        .unwrap(),
                     time_zone: Some("Asia/Tokyo".to_string()),
                 }),
                 end: Some(EventDateTime::DateTime {
-                    date_time: "2025-12-09T11:00:00+09:00".to_string(),
+                    date_time: chrono::DateTime::parse_from_rfc3339("2025-12-09T11:00:00+09:00")
+                        .unwrap(),
                     time_zone: Some("Asia/Tokyo".to_string()),
                 }),
                 description: Some("Weekly sync".to_string()),

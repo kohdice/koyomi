@@ -5,8 +5,16 @@ const LONG_ABOUT: &str = r#"Command line interface for Koyomi, a calendar tool.
 
 Its name derives from the Japanese word "暦" (koyomi), meaning calendar."#;
 
+fn parse_timezone(s: &str) -> Result<koyomi_core::calendar::TimeZone, String> {
+    match s {
+        "JST" => Ok(koyomi_core::calendar::TimeZone::Jst),
+        "UTC" => Ok(koyomi_core::calendar::TimeZone::Utc),
+        _ => Err(format!("invalid timezone '{s}': expected JST or UTC")),
+    }
+}
+
 #[derive(Parser, Debug)]
-#[command(version, about = ABOUT, long_about = LONG_ABOUT, subcommand_required = true)]
+#[command(version, about = ABOUT, long_about = LONG_ABOUT)]
 pub struct Cli {
     /// Increase verbosity (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true)]
@@ -16,8 +24,17 @@ pub struct Cli {
     #[arg(short, long, global = true, conflicts_with = "verbose")]
     pub quiet: bool,
 
+    /// Calendar ID (default: primary)
+    #[arg(short, long, default_value = "primary", global = true,
+          value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub calendar: String,
+
+    /// Timezone for time range calculation (default: system timezone)
+    #[arg(short = 't', long, value_parser = parse_timezone, global = true)]
+    pub timezone: Option<koyomi_core::calendar::TimeZone>,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 /// Time period for event listing
@@ -46,10 +63,6 @@ pub enum Commands {
         /// Period: d(ay), w(eek), m(onth)
         #[arg(short, long, value_enum, default_value = "day")]
         period: Period,
-        /// Calendar ID (default: primary)
-        #[arg(short, long, default_value = "primary",
-              value_parser = clap::builder::NonEmptyStringValueParser::new())]
-        calendar: String,
         /// Show detailed event information
         #[arg(short, long)]
         details: bool,
@@ -70,18 +83,26 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_no_subcommand() {
-        let result = Cli::try_parse_from(["koyomi"]);
-        assert!(result.is_err());
+    fn cli_accepts_no_subcommand_for_tui_mode() {
+        let cli = Cli::parse_from(["koyomi"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.calendar, "primary");
+    }
+
+    #[test]
+    fn cli_accepts_no_subcommand_with_calendar() {
+        let cli = Cli::parse_from(["koyomi", "--calendar", "work@example.com"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.calendar, "work@example.com");
     }
 
     #[test]
     fn cli_parses_events_command_with_defaults() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         match cli.command {
-            Commands::Events { period, calendar, details, limit } => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Day);
-                assert_eq!(calendar, "primary");
+                assert_eq!(cli.calendar, "primary");
                 assert!(!details);
                 assert_eq!(limit, 250);
             }
@@ -93,7 +114,7 @@ mod tests {
     fn cli_parses_events_command_with_period_alias() {
         let cli = Cli::parse_from(["koyomi", "events", "-p", "w"]);
         match cli.command {
-            Commands::Events { period, .. } => {
+            Some(Commands::Events { period, .. }) => {
                 assert_eq!(period, Period::Week);
             }
             _ => panic!("Expected Events command"),
@@ -114,9 +135,9 @@ mod tests {
             "100",
         ]);
         match cli.command {
-            Commands::Events { period, calendar, details, limit } => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Month);
-                assert_eq!(calendar, "work@example.com");
+                assert_eq!(cli.calendar, "work@example.com");
                 assert!(details);
                 assert_eq!(limit, 100);
             }
@@ -138,9 +159,9 @@ mod tests {
             "50",
         ]);
         match cli.command {
-            Commands::Events { period, calendar, details, limit } => {
+            Some(Commands::Events { period, details, limit }) => {
                 assert_eq!(period, Period::Month);
-                assert_eq!(calendar, "test@example.com");
+                assert_eq!(cli.calendar, "test@example.com");
                 assert!(details);
                 assert_eq!(limit, 50);
             }
@@ -171,5 +192,35 @@ mod tests {
     fn cli_defaults_quiet_to_false() {
         let cli = Cli::parse_from(["koyomi", "events"]);
         assert!(!cli.quiet);
+    }
+
+    #[test]
+    fn cli_parses_timezone_jst() {
+        let cli = Cli::parse_from(["koyomi", "--timezone", "JST", "events"]);
+        assert_eq!(cli.timezone, Some(koyomi_core::calendar::TimeZone::Jst));
+    }
+
+    #[test]
+    fn cli_parses_timezone_utc() {
+        let cli = Cli::parse_from(["koyomi", "--timezone", "UTC", "events"]);
+        assert_eq!(cli.timezone, Some(koyomi_core::calendar::TimeZone::Utc));
+    }
+
+    #[test]
+    fn cli_timezone_default_is_none() {
+        let cli = Cli::parse_from(["koyomi", "events"]);
+        assert!(cli.timezone.is_none());
+    }
+
+    #[test]
+    fn cli_timezone_rejects_lowercase() {
+        let result = Cli::try_parse_from(["koyomi", "--timezone", "utc", "events"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_timezone_rejects_mixed_case() {
+        let result = Cli::try_parse_from(["koyomi", "--timezone", "Utc", "events"]);
+        assert!(result.is_err());
     }
 }

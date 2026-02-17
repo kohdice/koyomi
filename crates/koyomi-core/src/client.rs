@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::Result;
 use crate::auth::token::StoredToken;
@@ -12,7 +12,7 @@ const MAX_RETRIES: u32 = 3;
 /// High-level API client for Google Calendar operations.
 ///
 /// Wraps an HTTP client and provides retry with exponential backoff
-/// for transient errors (HTTP 429, 5xx).
+/// for transient errors (HTTP 429, 403 rate-limit, 5xx).
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -30,6 +30,7 @@ impl Client {
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(10))
             .user_agent(format!("koyomi/{}", env!("CARGO_PKG_VERSION")))
+            .gzip(true)
             .build()?;
         Ok(Self { http })
     }
@@ -40,7 +41,12 @@ impl Client {
         &self.http
     }
 
-    /// Send an authenticated GET request.
+    /// Send an authenticated GET request with retry on transient errors.
+    ///
+    /// Retries on HTTP 429, 5xx, and 403 rate-limit errors with
+    /// exponential backoff and jitter. After exhausting all retries
+    /// (`MAX_RETRIES`), returns the last error response as `Ok(response)`
+    /// so that the caller can inspect the status code and body.
     pub(crate) async fn get(
         &self,
         url: &str,
@@ -57,23 +63,48 @@ impl Client {
                 .await?;
 
             let status = response.status();
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+
+            let is_retryable = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status.is_server_error()
+                || (status == reqwest::StatusCode::FORBIDDEN && is_rate_limit_forbidden(&response));
+
+            if is_retryable {
                 retries += 1;
                 if retries > MAX_RETRIES {
+                    warn!("HTTP {status} — giving up after {MAX_RETRIES} retries");
                     return Ok(response);
                 }
 
-                let retry_after = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok());
+                let retry_after =
+                    response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| {
+                        match v.to_str() {
+                            Ok(s) => match s.parse::<u64>() {
+                                Ok(n) => Some(n),
+                                Err(e) => {
+                                    debug!("Non-numeric Retry-After header '{s}': {e}");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                debug!("Non-ASCII Retry-After header: {e}");
+                                None
+                            }
+                        }
+                    });
+
+                // Consume the response body to allow HTTP/2 connection reuse
+                let _ = response.bytes().await;
 
                 let base_secs = 2u64.pow(retries - 1); // 1, 2, 4
                 let wait_secs = retry_after.map_or(base_secs, |ra| ra.max(base_secs));
+                let jitter_ms = simple_jitter(wait_secs);
+                let wait = Duration::from_millis(wait_secs * 1000 + jitter_ms);
 
-                warn!("HTTP {status} — retrying in {wait_secs}s (attempt {retries}/{MAX_RETRIES})");
-                tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
+                warn!(
+                    "HTTP {status} — retrying in {}ms (attempt {retries}/{MAX_RETRIES})",
+                    wait.as_millis()
+                );
+                tokio::time::sleep(wait).await;
                 continue;
             }
 
@@ -94,7 +125,45 @@ impl Client {
         token: &StoredToken,
         config: &ListEventsConfig,
     ) -> Result<CalendarEvents> {
-        calendar::list_events(self, token.access_token(), config, calendar::CALENDAR_API_BASE_URL)
-            .await
+        calendar::list_events(self, token.access_token(), config, calendar::API_BASE_URL).await
     }
+}
+
+/// Read error body helper for consistent error response handling.
+pub(crate) async fn read_error_body(response: reqwest::Response) -> String {
+    response.text().await.unwrap_or_else(|e| {
+        debug!("Failed to read error response body: {}", e);
+        format!("(failed to read response body: {e})")
+    })
+}
+
+/// Check if a 403 response indicates a rate limit error.
+///
+/// Google Calendar API returns 403 for both rate limits (`rateLimitExceeded`,
+/// `userRateLimitExceeded`) and permission errors. We peek at the
+/// `x-ratelimit-remaining` header or `Retry-After` presence as hints.
+///
+/// Since we cannot read the body without consuming the response,
+/// we use header-based heuristics when available.
+fn is_rate_limit_forbidden(response: &reqwest::Response) -> bool {
+    if let Some(remaining) = response.headers().get("x-ratelimit-remaining")
+        && let Ok(s) = remaining.to_str()
+        && let Ok(n) = s.parse::<u64>()
+    {
+        return n == 0;
+    }
+    // Retry-After header presence on 403 is a strong signal of rate limiting
+    response.headers().contains_key(reqwest::header::RETRY_AFTER)
+}
+
+/// Generate a simple jitter value (0..base_secs*500 ms) without requiring a CSPRNG.
+///
+/// Uses the low bits of the current time as a cheap entropy source.
+fn simple_jitter(base_secs: u64) -> u64 {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let max_jitter_ms = base_secs * 500; // up to 50% of base
+    if max_jitter_ms == 0 { 0 } else { seed % max_jitter_ms }
 }

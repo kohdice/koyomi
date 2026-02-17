@@ -57,6 +57,12 @@ pub enum Error {
     #[error("Access denied by user.")]
     AuthAccessDenied,
 
+    #[error(
+        "Authorization server did not return a refresh token. \
+         Please revoke app access at https://myaccount.google.com/permissions and try again."
+    )]
+    AuthNoRefreshToken,
+
     #[error("Authentication error: {0}")]
     Auth(String),
 

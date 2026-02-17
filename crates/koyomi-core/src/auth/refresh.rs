@@ -64,10 +64,7 @@ pub async fn refresh_token(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            tracing::debug!("Failed to read error response body: {}", e);
-            format!("(failed to read response body: {e})")
-        });
+        let body = crate::client::read_error_body(response).await;
         let message = match serde_json::from_str::<RefreshErrorResponse>(&body) {
             Ok(error) if error.error == "invalid_grant" => {
                 let desc = error.error_description.as_deref().unwrap_or("token expired or revoked");

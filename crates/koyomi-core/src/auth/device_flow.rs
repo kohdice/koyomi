@@ -19,7 +19,8 @@ struct DeviceCodeRequest<'a> {
 pub(super) struct DeviceCodeResponse {
     pub(super) device_code: String,
     pub(super) user_code: String,
-    pub(super) verification_url: String,
+    #[serde(alias = "verification_url")]
+    pub(super) verification_uri: String,
     pub(super) expires_in: u64,
     pub(super) interval: u64,
 }
@@ -52,7 +53,7 @@ struct TokenErrorResponse {
 
 /// Start the device authorization flow
 ///
-/// Returns a [`DeviceCodeResponse`] containing `user_code` and `verification_url`.
+/// Returns a [`DeviceCodeResponse`] containing `user_code` and `verification_uri`.
 ///
 /// # Errors
 ///
@@ -72,10 +73,7 @@ pub(super) async fn start(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            tracing::debug!("Failed to read error response body: {}", e);
-            format!("(failed to read response body: {e})")
-        });
+        let body = crate::client::read_error_body(response).await;
         let message = match serde_json::from_str::<TokenErrorResponse>(&body) {
             Ok(error) => match error.error_description {
                 Some(desc) => format!("Failed to get device code: {} - {}", error.error, desc),
@@ -189,7 +187,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "device_code": "test-device-code",
                 "user_code": "ABCD-EFGH",
-                "verification_url": "https://www.google.com/device",
+                "verification_uri": "https://www.google.com/device",
                 "expires_in": 1800,
                 "interval": 5
             })))
@@ -204,9 +202,34 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.device_code, "test-device-code");
         assert_eq!(response.user_code, "ABCD-EFGH");
-        assert_eq!(response.verification_url, "https://www.google.com/device");
+        assert_eq!(response.verification_uri, "https://www.google.com/device");
         assert_eq!(response.expires_in, 1800);
         assert_eq!(response.interval, 5);
+    }
+
+    #[tokio::test]
+    async fn start_accepts_verification_url_alias() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/device/code"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "test-device-code",
+                "user_code": "ABCD-EFGH",
+                "verification_url": "https://www.google.com/device",
+                "expires_in": 1800,
+                "interval": 5
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/device/code", mock_server.uri());
+        let result = start(&client, "test-client-id", &url).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.verification_uri, "https://www.google.com/device");
     }
 
     #[tokio::test]

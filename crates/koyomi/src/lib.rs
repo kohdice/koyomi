@@ -23,16 +23,6 @@ fn init_tracing(verbose: u8) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize logging: {e}"))
 }
 
-impl From<Period> for koyomi_core::calendar::EventPeriod {
-    fn from(period: Period) -> Self {
-        match period {
-            Period::Day => Self::Day,
-            Period::Week => Self::Week,
-            Period::Month => Self::Month,
-        }
-    }
-}
-
 /// Run the CLI application
 ///
 /// # Errors
@@ -42,18 +32,19 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
 
+    let tz = cli.timezone.unwrap_or_default();
+    let client = koyomi_core::Client::new()?;
+
     match cli.command {
-        Commands::Login => {
-            let client = koyomi_core::Client::new()?;
-            handle_login(&client, cli.quiet).await
+        None => {
+            let token = koyomi_core::get_valid_token(&client).await?;
+            koyomi_ui::tui::run(client, token, cli.calendar, tz).await?;
+            Ok(())
         }
-        Commands::Logout => {
-            let client = koyomi_core::Client::new()?;
-            handle_logout(&client, cli.quiet).await
-        }
-        Commands::Events { period, calendar, details, limit } => {
-            let client = koyomi_core::Client::new()?;
-            handle_events(&client, period, calendar, details, limit).await
+        Some(Commands::Login) => handle_login(&client, cli.quiet).await,
+        Some(Commands::Logout) => handle_logout(&client, cli.quiet).await,
+        Some(Commands::Events { period, details, limit }) => {
+            handle_events(&client, period, cli.calendar, details, limit, tz).await
         }
     }
 }
@@ -63,11 +54,11 @@ async fn handle_login(client: &koyomi_core::Client, quiet: bool) -> Result<()> {
 
     // verification URL と user code は --quiet でも表示する（認証に必須）
     eprintln!();
-    eprintln!("To sign in, please visit: {}", session.verification_url());
+    eprintln!("To sign in, please visit: {}", session.verification_uri());
     eprintln!("Enter this code: {}", session.user_code());
     eprintln!();
 
-    if let Err(e) = open::that(session.verification_url()) {
+    if let Err(e) = open::that(session.verification_uri()) {
         tracing::warn!("Could not open browser automatically: {}", e);
         if !quiet {
             eprintln!("Could not open browser automatically. Please open the URL above manually.");
@@ -95,6 +86,14 @@ async fn handle_logout(client: &koyomi_core::Client, quiet: bool) -> Result<()> 
                 eprintln!("Successfully logged out.");
             }
         }
+        koyomi_core::LogoutResult::LoggedOutRevocationFailed => {
+            if !quiet {
+                eprintln!(
+                    "Logged out locally, but failed to revoke the token with Google. \
+                     The token may still be valid on Google's side."
+                );
+            }
+        }
         koyomi_core::LogoutResult::NotLoggedIn => {
             if !quiet {
                 eprintln!("Not currently logged in.");
@@ -117,10 +116,17 @@ async fn handle_events(
     calendar: String,
     details: bool,
     limit: u32,
+    tz: koyomi_core::calendar::TimeZone,
 ) -> Result<()> {
     let token = koyomi_core::get_valid_token(client).await?;
 
-    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, period.into(), limit)?;
+    let today = tz.today();
+    let (time_min, time_max) = match period {
+        Period::Day => koyomi_core::calendar::time_range::for_day(today, tz)?,
+        Period::Week => koyomi_core::calendar::time_range::for_week(today, tz)?,
+        Period::Month => koyomi_core::calendar::time_range::for_month(today, tz)?,
+    };
+    let config = koyomi_core::calendar::ListEventsConfig::new(calendar, time_min, time_max, limit)?;
 
     let events = client.list_events(&token, &config).await?;
 

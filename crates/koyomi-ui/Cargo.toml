@@ -9,6 +9,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anyhow = "1.0.101"
+chrono.workspace = true
+crossterm = "0.29.0"
 koyomi-core.workspace = true
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 serde.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tracing.workspace = true
+unicode-width = "0.2.2"

@@ -1,16 +1,16 @@
-use chrono::{DateTime, Local, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use super::types::{CalendarEvents, Event, EventPeriod};
+use super::types::{CalendarEvents, Event, ReminderOverride};
 use crate::{CalendarError, Result};
 
-pub(crate) const CALENDAR_API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
+pub(crate) const API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 
-/// Fields to request from Calendar info endpoint (Partial Response)
+/// Fields to request from CalendarList info endpoint (Partial Response)
 ///
 /// <https://developers.google.com/calendar/api/guides/performance#partial-response>
-const CALENDAR_INFO_FIELDS: &str = "summary";
+const CALENDAR_LIST_INFO_FIELDS: &str = "summary,defaultReminders";
 
 /// Fields to request from Events list endpoint (Partial Response)
 ///
@@ -44,7 +44,8 @@ const MAX_PAGES: u32 = 50;
 #[derive(Debug, Clone)]
 pub struct ListEventsConfig {
     pub(crate) calendar_id: String,
-    pub(crate) period: EventPeriod,
+    pub(crate) time_min: DateTime<Utc>,
+    pub(crate) time_max: DateTime<Utc>,
     pub(crate) max_results: u32,
 }
 
@@ -56,7 +57,13 @@ impl ListEventsConfig {
     /// Returns an error if:
     /// - `calendar_id` is empty
     /// - `max_results` is outside the range `1..=2500`
-    pub fn new(calendar_id: String, period: EventPeriod, max_results: u32) -> crate::Result<Self> {
+    /// - `time_min` is not before `time_max`
+    pub fn new(
+        calendar_id: String,
+        time_min: DateTime<Utc>,
+        time_max: DateTime<Utc>,
+        max_results: u32,
+    ) -> crate::Result<Self> {
         if calendar_id.is_empty() {
             return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
         }
@@ -65,15 +72,22 @@ impl ListEventsConfig {
                 "max_results must be between 1 and {MAX_RESULTS_LIMIT}"
             )));
         }
-        Ok(Self { calendar_id, period, max_results })
+        if time_min >= time_max {
+            return Err(crate::Error::ConfigInvalid("time_min must be before time_max".into()));
+        }
+        Ok(Self { calendar_id, time_min, time_max, max_results })
     }
 }
 
 impl Default for ListEventsConfig {
     fn default() -> Self {
+        let tz = super::time_range::TimeZone::default();
+        let (time_min, time_max) = super::time_range::for_day(tz.today(), tz)
+            .expect("default time range should always be valid");
         Self {
             calendar_id: "primary".to_string(),
-            period: EventPeriod::default(),
+            time_min,
+            time_max,
             max_results: DEFAULT_MAX_RESULTS,
         }
     }
@@ -87,8 +101,11 @@ struct PageResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct CalendarInfo {
+#[serde(rename_all = "camelCase")]
+struct CalendarListInfo {
     summary: Option<String>,
+    #[serde(default)]
+    default_reminders: Vec<ReminderOverride>,
 }
 
 #[derive(Deserialize)]
@@ -104,7 +121,14 @@ struct GoogleApiErrorBody {
 fn extract_error_message(body: &str) -> String {
     serde_json::from_str::<GoogleApiError>(body)
         .map(|e| e.error.message)
-        .unwrap_or_else(|_| body.to_string())
+        .unwrap_or_else(|_| truncate_string(body, 200))
+}
+
+fn truncate_string(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => format!("{}…", &s[..byte_idx]),
+        None => s.to_string(),
+    }
 }
 
 fn status_to_calendar_error(
@@ -124,22 +148,25 @@ fn status_to_calendar_error(
     }
 }
 
-/// Get the name of a calendar
+/// Get calendar information from the CalendarList API
+///
+/// Uses the CalendarList endpoint instead of the Calendars endpoint
+/// to obtain both the calendar name and default reminders.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The HTTP request fails
 /// - The server returns an error response
-pub(crate) async fn get_calendar_name(
+async fn get_calendar_info(
     client: &crate::client::Client,
     access_token: &str,
     calendar_id: &str,
     base_url: &str,
-) -> Result<String> {
+) -> Result<CalendarListInfo> {
     let url = reqwest::Url::parse_with_params(
-        &format!("{}/{}", base_url, urlencoding::encode(calendar_id)),
-        &[("fields", CALENDAR_INFO_FIELDS)],
+        &format!("{}/users/me/calendarList/{}", base_url, urlencoding::encode(calendar_id)),
+        &[("fields", CALENDAR_LIST_INFO_FIELDS)],
     )
     .map_err(|e| CalendarError::BadRequest {
         message: format!("Failed to construct calendar info URL: {e}"),
@@ -151,58 +178,17 @@ pub(crate) async fn get_calendar_name(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|e| {
-            tracing::debug!("Failed to read error response body: {}", e);
-            format!("(failed to read response body: {e})")
-        });
+        let body = crate::client::read_error_body(response).await;
         return Err(status_to_calendar_error(status, body, calendar_id).into());
     }
 
     let body = response.text().await?;
-    let info: CalendarInfo =
-        serde_json::from_str(&body).map_err(|e| CalendarError::BadRequest {
+    serde_json::from_str(&body).map_err(|e| {
+        CalendarError::BadRequest {
             message: format!("Failed to parse calendar info response: {e}"),
-        })?;
-
-    Ok(info.summary.unwrap_or_else(|| {
-        tracing::warn!("Calendar '{}' has no summary; using calendar ID as name", calendar_id);
-        calendar_id.to_string()
-    }))
-}
-
-/// Calculate time range based on period
-///
-/// # Errors
-///
-/// Returns an error if the time or timezone conversion fails
-fn calculate_time_range(period: EventPeriod) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    let now = Local::now();
-    let today_start = now
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| CalendarError::InvalidTime("failed to create midnight time".into()))?
-        .and_local_timezone(now.timezone())
-        .single()
-        .ok_or_else(|| CalendarError::InvalidTime("timezone conversion failed".into()))?;
-
-    let (start, end) = match period {
-        EventPeriod::Day => {
-            let end = today_start + TimeDelta::days(1);
-            (today_start, end)
         }
-        EventPeriod::Week => {
-            let end = today_start + TimeDelta::days(7);
-            (today_start, end)
-        }
-        EventPeriod::Month => {
-            let end = today_start.checked_add_months(chrono::Months::new(1)).ok_or_else(|| {
-                CalendarError::InvalidTime("failed to add 1 calendar month".into())
-            })?;
-            (today_start, end)
-        }
-    };
-
-    Ok((start.with_timezone(&Utc), end.with_timezone(&Utc)))
+        .into()
+    })
 }
 
 /// List calendar events
@@ -218,12 +204,21 @@ pub(crate) async fn list_events(
     config: &ListEventsConfig,
     base_url: &str,
 ) -> Result<CalendarEvents> {
-    let (time_min, time_max) = calculate_time_range(config.period)?;
+    let time_min = config.time_min;
+    let time_max = config.time_max;
 
     info!("Listing events for calendar '{}' from {} to {}", config.calendar_id, time_min, time_max);
 
-    let calendar_name =
-        get_calendar_name(client, access_token, &config.calendar_id, base_url).await?;
+    let calendar_info =
+        get_calendar_info(client, access_token, &config.calendar_id, base_url).await?;
+    let calendar_name = calendar_info.summary.unwrap_or_else(|| {
+        tracing::warn!(
+            "Calendar '{}' has no summary; using calendar ID as name",
+            config.calendar_id
+        );
+        config.calendar_id.clone()
+    });
+    let default_reminders = calendar_info.default_reminders;
 
     let mut all_events: Vec<Event> = Vec::new();
     let mut page_token: Option<String> = None;
@@ -253,7 +248,7 @@ pub(crate) async fn list_events(
             params.push(("pageToken", token.clone()));
         }
         let url = reqwest::Url::parse_with_params(
-            &format!("{}/{}/events", base_url, urlencoding::encode(&config.calendar_id)),
+            &format!("{}/calendars/{}/events", base_url, urlencoding::encode(&config.calendar_id)),
             &params,
         )
         .map_err(|e| CalendarError::BadRequest {
@@ -266,10 +261,7 @@ pub(crate) async fn list_events(
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_else(|e| {
-                tracing::debug!("Failed to read error response body: {}", e);
-                format!("(failed to read response body: {e})")
-            });
+            let body = crate::client::read_error_body(response).await;
             return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
         }
 
@@ -295,6 +287,17 @@ pub(crate) async fn list_events(
         }
     }
 
+    if !default_reminders.is_empty() {
+        for event in &mut all_events {
+            if let Some(reminders) = &mut event.reminders
+                && reminders.use_default
+                && reminders.overrides.is_empty()
+            {
+                reminders.overrides = default_reminders.clone();
+            }
+        }
+    }
+
     info!("Found {} events", all_events.len());
 
     Ok(CalendarEvents { calendar: calendar_name, events: all_events, truncated })
@@ -306,89 +309,84 @@ mod tests {
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn sample_time_range() -> (DateTime<Utc>, DateTime<Utc>) {
+        use super::super::time_range::TimeZone;
+        use chrono::NaiveDate;
+        super::super::time_range::for_day(
+            NaiveDate::from_ymd_opt(2026, 2, 16).unwrap(),
+            TimeZone::Jst,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn list_events_config_default() {
         let config = ListEventsConfig::default();
         assert_eq!(config.calendar_id, "primary");
-        assert_eq!(config.period, EventPeriod::Day);
+        assert!(config.time_min < config.time_max);
         assert_eq!(config.max_results, 250);
     }
 
-    #[test]
-    fn calculate_time_range_day() {
-        let (start, end) = calculate_time_range(EventPeriod::Day).unwrap();
-        let diff = end - start;
-        assert_eq!(diff.num_days(), 1);
-    }
-
-    #[test]
-    fn calculate_time_range_week() {
-        let (start, end) = calculate_time_range(EventPeriod::Week).unwrap();
-        let diff = end - start;
-        assert_eq!(diff.num_days(), 7);
-    }
-
-    #[test]
-    fn calculate_time_range_month() {
-        let (start, end) = calculate_time_range(EventPeriod::Month).unwrap();
-        let diff = end - start;
-        let days = diff.num_days();
-        assert!((28..=31).contains(&days), "Expected 28-31 days for a calendar month, got {days}");
-    }
-
     #[tokio::test]
-    async fn get_calendar_name_returns_summary() {
+    async fn get_calendar_info_returns_summary() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .and(header("Authorization", "Bearer test_token"))
-            .and(query_param("fields", CALENDAR_INFO_FIELDS))
+            .and(query_param("fields", CALENDAR_LIST_INFO_FIELDS))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "summary": "My Calendar"
+                "summary": "My Calendar",
+                "defaultReminders": [{"method": "popup", "minutes": 10}]
             })))
             .mount(&mock_server)
             .await;
 
         let client = crate::client::Client::new().unwrap();
         let token = "test_token";
-        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
+        let result = get_calendar_info(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "My Calendar");
+        let info = result.unwrap();
+        assert_eq!(info.summary, Some("My Calendar".to_string()));
+        assert_eq!(info.default_reminders.len(), 1);
+        assert_eq!(info.default_reminders[0].method, super::super::types::ReminderMethod::Popup);
+        assert_eq!(info.default_reminders[0].minutes, 10);
     }
 
     #[tokio::test]
-    async fn get_calendar_name_returns_id_when_no_summary() {
+    async fn get_calendar_info_returns_none_when_no_summary() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .mount(&mock_server)
             .await;
 
         let client = crate::client::Client::new().unwrap();
         let token = "test_token";
-        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
+        let result = get_calendar_info(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "primary");
+        let info = result.unwrap();
+        assert!(info.summary.is_none());
+        assert!(info.default_reminders.is_empty());
     }
 
     #[tokio::test]
-    async fn get_calendar_name_returns_error_on_failure() {
+    async fn get_calendar_info_returns_error_on_failure() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
             .mount(&mock_server)
             .await;
 
         let client = crate::client::Client::new().unwrap();
         let token = "test_token";
-        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
+        let result = get_calendar_info(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -399,18 +397,17 @@ mod tests {
     async fn list_events_returns_events() {
         let mock_server = MockServer::start().await;
 
-        // Mock calendar info
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "summary": "My Calendar"
+                "summary": "My Calendar",
+                "defaultReminders": [{"method": "popup", "minutes": 10}]
             })))
             .mount(&mock_server)
             .await;
 
-        // Mock events list
         Mock::given(method("GET"))
-            .and(path("/primary/events"))
+            .and(path("/calendars/primary/events"))
             .and(query_param("singleEvents", "true"))
             .and(query_param("orderBy", "startTime"))
             .and(query_param("fields", EVENTS_LIST_FIELDS))
@@ -450,16 +447,17 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "summary": "My Calendar"
+                "summary": "My Calendar",
+                "defaultReminders": [{"method": "popup", "minutes": 10}]
             })))
             .mount(&mock_server)
             .await;
 
         // First page
         Mock::given(method("GET"))
-            .and(path("/primary/events"))
+            .and(path("/calendars/primary/events"))
             .and(wiremock::matchers::query_param_is_missing("pageToken"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "items": [
@@ -475,7 +473,7 @@ mod tests {
 
         // Second page
         Mock::given(method("GET"))
-            .and(path("/primary/events"))
+            .and(path("/calendars/primary/events"))
             .and(query_param("pageToken", "token123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "items": [
@@ -553,18 +551,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_calendar_name_returns_unauthenticated_on_401() {
+    async fn get_calendar_info_returns_unauthenticated_on_401() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/primary"))
+            .and(path("/users/me/calendarList/primary"))
             .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
             .mount(&mock_server)
             .await;
 
         let client = crate::client::Client::new().unwrap();
         let token = "invalid_token";
-        let result = get_calendar_name(&client, token, "primary", &mock_server.uri()).await;
+        let result = get_calendar_info(&client, token, "primary", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -572,11 +570,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_calendar_name_returns_forbidden_on_403() {
+    async fn get_calendar_info_returns_forbidden_on_403() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/private%40example.com"))
+            .and(path("/users/me/calendarList/private%40example.com"))
             .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
             .mount(&mock_server)
             .await;
@@ -584,7 +582,7 @@ mod tests {
         let client = crate::client::Client::new().unwrap();
         let token = "test_token";
         let result =
-            get_calendar_name(&client, token, "private@example.com", &mock_server.uri()).await;
+            get_calendar_info(&client, token, "private@example.com", &mock_server.uri()).await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -600,39 +598,61 @@ mod tests {
 
     #[test]
     fn list_events_config_new_validates_empty_calendar_id() {
-        let result = ListEventsConfig::new(String::new(), EventPeriod::Day, 250);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new(String::new(), time_min, time_max, 250);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
     }
 
     #[test]
     fn list_events_config_new_validates_max_results_zero() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 0);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 0);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max_results must be between"));
     }
 
     #[test]
     fn list_events_config_new_validates_max_results_over_limit() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2501);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 2501);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max_results must be between"));
     }
 
     #[test]
+    fn list_events_config_new_validates_time_order() {
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_max, time_min, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("time_min must be before time_max"));
+    }
+
+    #[test]
+    fn list_events_config_new_validates_equal_times() {
+        let (time_min, _) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_min, 250);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("time_min must be before time_max"));
+    }
+
+    #[test]
     fn list_events_config_new_accepts_valid_params() {
-        let result = ListEventsConfig::new("primary".to_string(), EventPeriod::Week, 100);
+        let (time_min, time_max) = sample_time_range();
+        let result = ListEventsConfig::new("primary".to_string(), time_min, time_max, 100);
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.calendar_id, "primary");
-        assert_eq!(config.period, EventPeriod::Week);
+        assert_eq!(config.time_min, time_min);
+        assert_eq!(config.time_max, time_max);
         assert_eq!(config.max_results, 100);
     }
 
     #[test]
     fn list_events_config_new_accepts_boundary_values() {
-        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 1).is_ok());
-        assert!(ListEventsConfig::new("primary".to_string(), EventPeriod::Day, 2500).is_ok());
+        let (time_min, time_max) = sample_time_range();
+        assert!(ListEventsConfig::new("primary".to_string(), time_min, time_max, 1).is_ok());
+        assert!(ListEventsConfig::new("primary".to_string(), time_min, time_max, 2500).is_ok());
     }
 
     #[tokio::test]
@@ -692,5 +712,194 @@ mod tests {
         let url = format!("{}/test", mock_server.uri());
         let response = client.get(&url, token).await.unwrap();
         assert_eq!(response.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn list_events_resolves_use_default_reminders() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList/primary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "summary": "My Calendar",
+                "defaultReminders": [{"method": "popup", "minutes": 10}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/calendars/primary/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {
+                        "summary": "Default Reminder Event",
+                        "start": {
+                            "dateTime": "2025-12-09T10:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "end": {
+                            "dateTime": "2025-12-09T11:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "reminders": {
+                            "useDefault": true
+                        },
+                        "htmlLink": "https://calendar.google.com/event?eid=abc123"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = ListEventsConfig::default();
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
+
+        let events = result.unwrap();
+        let reminders = events.events[0].reminders.as_ref().unwrap();
+        assert!(reminders.use_default);
+        assert_eq!(reminders.overrides.len(), 1);
+        assert_eq!(reminders.overrides[0].method, super::super::types::ReminderMethod::Popup);
+        assert_eq!(reminders.overrides[0].minutes, 10);
+    }
+
+    #[tokio::test]
+    async fn list_events_preserves_custom_overrides() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList/primary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "summary": "My Calendar",
+                "defaultReminders": [{"method": "popup", "minutes": 10}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/calendars/primary/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {
+                        "summary": "Custom Reminder Event",
+                        "start": {
+                            "dateTime": "2025-12-09T10:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "end": {
+                            "dateTime": "2025-12-09T11:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "reminders": {
+                            "useDefault": false,
+                            "overrides": [
+                                {"method": "email", "minutes": 1440}
+                            ]
+                        },
+                        "htmlLink": "https://calendar.google.com/event?eid=abc456"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = ListEventsConfig::default();
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
+
+        let events = result.unwrap();
+        let reminders = events.events[0].reminders.as_ref().unwrap();
+        assert!(!reminders.use_default);
+        assert_eq!(reminders.overrides.len(), 1);
+        assert_eq!(reminders.overrides[0].method, super::super::types::ReminderMethod::Email);
+        assert_eq!(reminders.overrides[0].minutes, 1440);
+    }
+
+    #[tokio::test]
+    async fn list_events_no_resolve_when_defaults_empty() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList/primary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "summary": "My Calendar",
+                "defaultReminders": []
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/calendars/primary/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {
+                        "summary": "No Default Event",
+                        "start": {
+                            "dateTime": "2025-12-09T10:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "end": {
+                            "dateTime": "2025-12-09T11:00:00+09:00",
+                            "timeZone": "Asia/Tokyo"
+                        },
+                        "reminders": {
+                            "useDefault": true
+                        },
+                        "htmlLink": "https://calendar.google.com/event?eid=abc789"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = ListEventsConfig::default();
+        let result = list_events(&client, "test_token", &config, &mock_server.uri()).await;
+
+        let events = result.unwrap();
+        let reminders = events.events[0].reminders.as_ref().unwrap();
+        assert!(reminders.use_default);
+        assert!(reminders.overrides.is_empty());
+    }
+
+    #[test]
+    fn extract_error_message_parses_google_api_error() {
+        let body = r#"{"error":{"message":"Not Found","errors":[],"code":404}}"#;
+        assert_eq!(extract_error_message(body), "Not Found");
+    }
+
+    #[test]
+    fn extract_error_message_returns_truncated_fallback() {
+        let long_body = "x".repeat(300);
+        let result = extract_error_message(&long_body);
+        assert!(result.len() < 300);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn extract_error_message_returns_short_body_as_is() {
+        let body = "short error";
+        assert_eq!(extract_error_message(body), "short error");
+    }
+
+    #[test]
+    fn truncate_string_preserves_short_strings() {
+        assert_eq!(truncate_string("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_string_truncates_long_strings() {
+        let s = "a".repeat(250);
+        let result = truncate_string(&s, 200);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 201); // 200 chars + ellipsis
+    }
+
+    #[test]
+    fn truncate_string_handles_multibyte_chars() {
+        let s = "あ".repeat(250);
+        let result = truncate_string(&s, 200);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 201);
     }
 }
