@@ -46,7 +46,7 @@ pub enum Commands {
     /// Log out of a Google account
     Logout,
     /// Manage calendar events
-    Event(EventArgs),
+    Event(Box<EventArgs>),
 }
 
 #[cfg(test)]
