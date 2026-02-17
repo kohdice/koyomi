@@ -215,6 +215,42 @@ impl EventStatus {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct InsertEventBody {
+    pub summary: String,
+    pub start: EventDateTime,
+    pub end: EventDateTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PatchEventBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<EventDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<EventDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+impl PatchEventBody {
+    #[must_use]
+    pub fn has_fields(&self) -> bool {
+        self.summary.is_some()
+            || self.start.is_some()
+            || self.end.is_some()
+            || self.description.is_some()
+            || self.location.is_some()
+    }
+}
+
 /// Attendee's response status to an event invitation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -538,5 +574,85 @@ mod tests {
         let json = r#"{"date": "2025-12-09"}"#;
         let result = serde_json::from_str::<EventDateTime>(json);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn insert_event_body_serializes_required_fields() {
+        let body = InsertEventBody {
+            summary: "Meeting".to_string(),
+            start: EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-17T10:00:00+09:00")
+                    .unwrap(),
+                time_zone: Some("Asia/Tokyo".to_string()),
+            },
+            end: EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-17T11:00:00+09:00")
+                    .unwrap(),
+                time_zone: Some("Asia/Tokyo".to_string()),
+            },
+            description: None,
+            location: None,
+        };
+
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["summary"], "Meeting");
+        assert!(json["start"]["dateTime"].is_string());
+        assert!(json["end"]["dateTime"].is_string());
+        assert!(json.get("description").is_none());
+        assert!(json.get("location").is_none());
+    }
+
+    #[test]
+    fn insert_event_body_serializes_optional_fields() {
+        let body = InsertEventBody {
+            summary: "Meeting".to_string(),
+            start: EventDateTime::Date {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 2, 17).unwrap(),
+            },
+            end: EventDateTime::Date {
+                date: chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap(),
+            },
+            description: Some("A description".to_string()),
+            location: Some("Room A".to_string()),
+        };
+
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["description"], "A description");
+        assert_eq!(json["location"], "Room A");
+        assert_eq!(json["start"]["date"], "2026-02-17");
+    }
+
+    #[test]
+    fn patch_event_body_skips_none_fields() {
+        let body = PatchEventBody { summary: Some("Updated".to_string()), ..Default::default() };
+
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["summary"], "Updated");
+        assert!(json.get("start").is_none());
+        assert!(json.get("end").is_none());
+        assert!(json.get("description").is_none());
+        assert!(json.get("location").is_none());
+    }
+
+    #[test]
+    fn patch_event_body_empty_serializes_to_empty_object() {
+        let body = PatchEventBody::default();
+
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[test]
+    fn patch_event_body_has_fields() {
+        let empty = PatchEventBody::default();
+        assert!(!empty.has_fields());
+
+        let with_summary =
+            PatchEventBody { summary: Some("Test".to_string()), ..Default::default() };
+        assert!(with_summary.has_fields());
+
+        let with_location =
+            PatchEventBody { location: Some("Room".to_string()), ..Default::default() };
+        assert!(with_location.has_fields());
     }
 }

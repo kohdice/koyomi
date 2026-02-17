@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
-use super::types::{CalendarEvents, Event, ReminderOverride};
+use super::types::{CalendarEvents, Event, InsertEventBody, PatchEventBody, ReminderOverride};
 use crate::{CalendarError, Result};
 
 pub(crate) const API_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
@@ -76,6 +76,76 @@ impl ListEventsConfig {
             return Err(crate::Error::ConfigInvalid("time_min must be before time_max".into()));
         }
         Ok(Self { calendar_id, time_min, time_max, max_results })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertEventConfig {
+    pub(crate) calendar_id: String,
+    pub(crate) body: InsertEventBody,
+}
+
+impl InsertEventConfig {
+    /// # Errors
+    ///
+    /// Returns an error if `calendar_id` is empty or `summary` is empty.
+    pub fn new(calendar_id: String, body: InsertEventBody) -> crate::Result<Self> {
+        if calendar_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
+        }
+        if body.summary.is_empty() {
+            return Err(crate::Error::ConfigInvalid("summary must not be empty".into()));
+        }
+        Ok(Self { calendar_id, body })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PatchEventConfig {
+    pub(crate) calendar_id: String,
+    pub(crate) event_id: String,
+    pub(crate) body: PatchEventBody,
+}
+
+impl PatchEventConfig {
+    /// # Errors
+    ///
+    /// Returns an error if `calendar_id` or `event_id` is empty,
+    /// or no fields are set in the body.
+    pub fn new(calendar_id: String, event_id: String, body: PatchEventBody) -> crate::Result<Self> {
+        if calendar_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
+        }
+        if event_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("event_id must not be empty".into()));
+        }
+        if !body.has_fields() {
+            return Err(crate::Error::ConfigInvalid(
+                "at least one field must be set for patch".into(),
+            ));
+        }
+        Ok(Self { calendar_id, event_id, body })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteEventConfig {
+    pub(crate) calendar_id: String,
+    pub(crate) event_id: String,
+}
+
+impl DeleteEventConfig {
+    /// # Errors
+    ///
+    /// Returns an error if `calendar_id` or `event_id` is empty.
+    pub fn new(calendar_id: String, event_id: String) -> crate::Result<Self> {
+        if calendar_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("calendar_id must not be empty".into()));
+        }
+        if event_id.is_empty() {
+            return Err(crate::Error::ConfigInvalid("event_id must not be empty".into()));
+        }
+        Ok(Self { calendar_id, event_id })
     }
 }
 
@@ -189,6 +259,128 @@ async fn get_calendar_info(
         }
         .into()
     })
+}
+
+fn status_to_event_error(
+    status: reqwest::StatusCode,
+    body: String,
+    calendar_id: &str,
+    event_id: &str,
+) -> CalendarError {
+    let message = extract_error_message(&body);
+    match status.as_u16() {
+        401 => CalendarError::Unauthenticated,
+        403 => CalendarError::Forbidden { calendar_id: calendar_id.to_string() },
+        404 => CalendarError::EventNotFound {
+            calendar_id: calendar_id.to_string(),
+            event_id: event_id.to_string(),
+        },
+        409 => CalendarError::BadRequest { message: format!("Conflict: {message}") },
+        429 => CalendarError::RateLimitExceeded,
+        400 => CalendarError::BadRequest { message },
+        status if status >= 500 => CalendarError::ServerError { status, message },
+        status => CalendarError::UnexpectedStatus { status, message },
+    }
+}
+
+/// Insert a new calendar event
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the server returns an error.
+pub(crate) async fn insert_event(
+    client: &crate::client::Client,
+    access_token: &str,
+    config: &InsertEventConfig,
+    base_url: &str,
+) -> Result<Event> {
+    let url = format!("{}/calendars/{}/events", base_url, urlencoding::encode(&config.calendar_id));
+
+    info!("Inserting event '{}' into calendar '{}'", config.body.summary, config.calendar_id);
+
+    let response = client.post(&url, access_token, &config.body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = crate::client::read_error_body(response).await;
+        return Err(status_to_calendar_error(status, body, &config.calendar_id).into());
+    }
+
+    let body = response.text().await?;
+    serde_json::from_str(&body).map_err(|e| {
+        CalendarError::BadRequest { message: format!("Failed to parse insert event response: {e}") }
+            .into()
+    })
+}
+
+/// Update an existing calendar event (partial update)
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the server returns an error.
+pub(crate) async fn patch_event(
+    client: &crate::client::Client,
+    access_token: &str,
+    config: &PatchEventConfig,
+    base_url: &str,
+) -> Result<Event> {
+    let url = format!(
+        "{}/calendars/{}/events/{}",
+        base_url,
+        urlencoding::encode(&config.calendar_id),
+        urlencoding::encode(&config.event_id)
+    );
+
+    info!("Patching event '{}' in calendar '{}'", config.event_id, config.calendar_id);
+
+    let response = client.patch(&url, access_token, &config.body).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = crate::client::read_error_body(response).await;
+        return Err(
+            status_to_event_error(status, body, &config.calendar_id, &config.event_id).into()
+        );
+    }
+
+    let body = response.text().await?;
+    serde_json::from_str(&body).map_err(|e| {
+        CalendarError::BadRequest { message: format!("Failed to parse patch event response: {e}") }
+            .into()
+    })
+}
+
+/// Delete a calendar event
+///
+/// # Errors
+///
+/// Returns an error if the HTTP request fails or the server returns an error.
+pub(crate) async fn delete_event(
+    client: &crate::client::Client,
+    access_token: &str,
+    config: &DeleteEventConfig,
+    base_url: &str,
+) -> Result<()> {
+    let url = format!(
+        "{}/calendars/{}/events/{}",
+        base_url,
+        urlencoding::encode(&config.calendar_id),
+        urlencoding::encode(&config.event_id)
+    );
+
+    info!("Deleting event '{}' from calendar '{}'", config.event_id, config.calendar_id);
+
+    let response = client.delete(&url, access_token).await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = crate::client::read_error_body(response).await;
+        return Err(
+            status_to_event_error(status, body, &config.calendar_id, &config.event_id).into()
+        );
+    }
+
+    Ok(())
 }
 
 /// List calendar events
@@ -901,5 +1093,299 @@ mod tests {
         let result = truncate_string(&s, 200);
         assert!(result.ends_with('…'));
         assert_eq!(result.chars().count(), 201);
+    }
+
+    // --- InsertEventConfig validation tests ---
+
+    #[test]
+    fn insert_event_config_rejects_empty_calendar_id() {
+        let body = sample_insert_body();
+        let result = InsertEventConfig::new(String::new(), body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
+    }
+
+    #[test]
+    fn insert_event_config_rejects_empty_summary() {
+        let body = super::super::types::InsertEventBody {
+            summary: String::new(),
+            start: sample_event_datetime(),
+            end: sample_event_datetime(),
+            description: None,
+            location: None,
+        };
+        let result = InsertEventConfig::new("primary".to_string(), body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("summary must not be empty"));
+    }
+
+    #[test]
+    fn insert_event_config_accepts_valid_params() {
+        let body = sample_insert_body();
+        let result = InsertEventConfig::new("primary".to_string(), body);
+        assert!(result.is_ok());
+    }
+
+    // --- PatchEventConfig validation tests ---
+
+    #[test]
+    fn patch_event_config_rejects_empty_calendar_id() {
+        let body = super::super::types::PatchEventBody {
+            summary: Some("Updated".to_string()),
+            ..Default::default()
+        };
+        let result = PatchEventConfig::new(String::new(), "event1".to_string(), body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
+    }
+
+    #[test]
+    fn patch_event_config_rejects_empty_event_id() {
+        let body = super::super::types::PatchEventBody {
+            summary: Some("Updated".to_string()),
+            ..Default::default()
+        };
+        let result = PatchEventConfig::new("primary".to_string(), String::new(), body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("event_id must not be empty"));
+    }
+
+    #[test]
+    fn patch_event_config_rejects_empty_body() {
+        let body = super::super::types::PatchEventBody::default();
+        let result = PatchEventConfig::new("primary".to_string(), "event1".to_string(), body);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("at least one field must be set"));
+    }
+
+    #[test]
+    fn patch_event_config_accepts_valid_params() {
+        let body = super::super::types::PatchEventBody {
+            summary: Some("Updated".to_string()),
+            ..Default::default()
+        };
+        let result = PatchEventConfig::new("primary".to_string(), "event1".to_string(), body);
+        assert!(result.is_ok());
+    }
+
+    // --- DeleteEventConfig validation tests ---
+
+    #[test]
+    fn delete_event_config_rejects_empty_calendar_id() {
+        let result = DeleteEventConfig::new(String::new(), "event1".to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("calendar_id must not be empty"));
+    }
+
+    #[test]
+    fn delete_event_config_rejects_empty_event_id() {
+        let result = DeleteEventConfig::new("primary".to_string(), String::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("event_id must not be empty"));
+    }
+
+    #[test]
+    fn delete_event_config_accepts_valid_params() {
+        let result = DeleteEventConfig::new("primary".to_string(), "event1".to_string());
+        assert!(result.is_ok());
+    }
+
+    // --- status_to_event_error tests ---
+
+    #[test]
+    fn status_to_event_error_returns_event_not_found_for_404() {
+        let status = reqwest::StatusCode::NOT_FOUND;
+        let error = status_to_event_error(status, "not found".to_string(), "primary", "event123");
+        assert!(matches!(error, CalendarError::EventNotFound { calendar_id, event_id }
+                if calendar_id == "primary" && event_id == "event123"));
+    }
+
+    #[test]
+    fn status_to_event_error_returns_bad_request_with_conflict_for_409() {
+        let status = reqwest::StatusCode::CONFLICT;
+        let error =
+            status_to_event_error(status, "conflict detail".to_string(), "primary", "event1");
+        assert!(
+            matches!(error, CalendarError::BadRequest { message } if message.starts_with("Conflict:"))
+        );
+    }
+
+    #[test]
+    fn status_to_event_error_returns_unauthenticated_for_401() {
+        let status = reqwest::StatusCode::UNAUTHORIZED;
+        let error = status_to_event_error(status, "unauthorized".to_string(), "primary", "event1");
+        assert!(matches!(error, CalendarError::Unauthenticated));
+    }
+
+    // --- API integration tests ---
+
+    fn sample_event_datetime() -> super::super::types::EventDateTime {
+        super::super::types::EventDateTime::DateTime {
+            date_time: chrono::DateTime::parse_from_rfc3339("2026-02-17T10:00:00+09:00").unwrap(),
+            time_zone: Some("Asia/Tokyo".to_string()),
+        }
+    }
+
+    fn sample_insert_body() -> super::super::types::InsertEventBody {
+        super::super::types::InsertEventBody {
+            summary: "Test Event".to_string(),
+            start: sample_event_datetime(),
+            end: super::super::types::EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-17T11:00:00+09:00")
+                    .unwrap(),
+                time_zone: Some("Asia/Tokyo".to_string()),
+            },
+            description: None,
+            location: None,
+        }
+    }
+
+    fn sample_event_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "created123",
+            "summary": "Test Event",
+            "status": "confirmed",
+            "start": {
+                "dateTime": "2026-02-17T10:00:00+09:00",
+                "timeZone": "Asia/Tokyo"
+            },
+            "end": {
+                "dateTime": "2026-02-17T11:00:00+09:00",
+                "timeZone": "Asia/Tokyo"
+            },
+            "htmlLink": "https://calendar.google.com/event?eid=created123"
+        })
+    }
+
+    #[tokio::test]
+    async fn insert_event_returns_created_event() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/calendars/primary/events"))
+            .and(header("Authorization", "Bearer test_token"))
+            .and(header("Content-Type", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(sample_event_json()))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = InsertEventConfig::new("primary".to_string(), sample_insert_body()).unwrap();
+        let result = insert_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_ok());
+        let event = result.unwrap();
+        assert_eq!(event.id, Some("created123".to_string()));
+        assert_eq!(event.summary, Some("Test Event".to_string()));
+    }
+
+    #[tokio::test]
+    async fn insert_event_returns_bad_request_on_400() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/calendars/primary/events"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "Invalid value", "code": 400}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = InsertEventConfig::new("primary".to_string(), sample_insert_body()).unwrap();
+        let result = insert_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid value"));
+    }
+
+    #[tokio::test]
+    async fn patch_event_returns_updated_event() {
+        let mock_server = MockServer::start().await;
+
+        let mut updated_json = sample_event_json();
+        updated_json["summary"] = serde_json::json!("Updated Event");
+
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/primary/events/event123"))
+            .and(header("Authorization", "Bearer test_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(updated_json))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let body = super::super::types::PatchEventBody {
+            summary: Some("Updated Event".to_string()),
+            ..Default::default()
+        };
+        let config =
+            PatchEventConfig::new("primary".to_string(), "event123".to_string(), body).unwrap();
+        let result = patch_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_ok());
+        let event = result.unwrap();
+        assert_eq!(event.summary, Some("Updated Event".to_string()));
+    }
+
+    #[tokio::test]
+    async fn patch_event_returns_event_not_found_on_404() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/calendars/primary/events/nonexistent"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let body = super::super::types::PatchEventBody {
+            summary: Some("Updated".to_string()),
+            ..Default::default()
+        };
+        let config =
+            PatchEventConfig::new("primary".to_string(), "nonexistent".to_string(), body).unwrap();
+        let result = patch_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Event not found: nonexistent"));
+    }
+
+    #[tokio::test]
+    async fn delete_event_returns_ok_on_204() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/calendars/primary/events/event123"))
+            .and(header("Authorization", "Bearer test_token"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config = DeleteEventConfig::new("primary".to_string(), "event123".to_string()).unwrap();
+        let result = delete_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_event_returns_event_not_found_on_404() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/calendars/primary/events/nonexistent"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&mock_server)
+            .await;
+
+        let client = crate::client::Client::new().unwrap();
+        let config =
+            DeleteEventConfig::new("primary".to_string(), "nonexistent".to_string()).unwrap();
+        let result = delete_event(&client, "test_token", &config, &mock_server.uri()).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Event not found: nonexistent"));
     }
 }

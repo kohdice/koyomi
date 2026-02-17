@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 chrono.workspace = true
 dirs = "6.0.0"
-reqwest = { version = "0.13.2", features = ["gzip", "form"] }
+reqwest = { version = "0.13.2", features = ["gzip", "form", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2.0.18"
