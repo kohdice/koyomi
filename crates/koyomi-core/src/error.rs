@@ -4,9 +4,13 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CalendarError {
-    /// Calendar or event not found (HTTP 404)
+    /// Calendar not found (HTTP 404)
     #[error("Calendar not found: {calendar_id}")]
     NotFound { calendar_id: String },
+
+    /// Event not found (HTTP 404)
+    #[error("Event not found: {event_id} in calendar {calendar_id}")]
+    EventNotFound { calendar_id: String, event_id: String },
 
     /// Access denied to calendar (HTTP 403)
     #[error("Access denied to calendar: {calendar_id}")]
@@ -117,6 +121,17 @@ mod tests {
         assert!(matches!(auth_error, Error::Auth(_)));
         assert!(matches!(token_not_found, Error::TokenNotFound));
         assert!(!matches!(token_not_found, Error::Auth(_)));
+    }
+
+    #[test]
+    fn event_not_found_converts_to_error() {
+        let calendar_error = CalendarError::EventNotFound {
+            calendar_id: "primary".to_string(),
+            event_id: "event123".to_string(),
+        };
+        let error: Error = calendar_error.into();
+        assert!(matches!(error, Error::Calendar(_)));
+        assert!(error.to_string().contains("Event not found: event123 in calendar primary"));
     }
 
     #[test]
