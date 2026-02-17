@@ -95,21 +95,8 @@ pub struct DeleteArgs {
     pub id: String,
 }
 
-/// Parse a user-supplied date/time string into `EventDateTime`.
-///
-/// Tries RFC 3339 first (timed event), then `YYYY-MM-DD` (all-day event).
-pub fn parse_event_datetime(s: &str) -> Result<EventDateTime, String> {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(EventDateTime::DateTime { date_time: dt, time_zone: None });
-    }
-
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Ok(EventDateTime::Date { date });
-    }
-
-    Err(format!(
-        "invalid date/time '{s}': expected RFC 3339 (e.g. 2026-02-17T10:00:00+09:00) or YYYY-MM-DD (e.g. 2026-02-17)"
-    ))
+fn parse_event_datetime(s: &str) -> Result<EventDateTime, String> {
+    EventDateTime::parse(s)
 }
 
 pub async fn handle_list(
@@ -153,6 +140,9 @@ pub async fn handle_add(
         end,
         description: args.description,
         location: args.location,
+        status: None,
+        attendees: Vec::new(),
+        reminders: None,
     };
     let config = koyomi_core::calendar::InsertEventConfig::new(calendar, body)?;
 
@@ -183,6 +173,9 @@ pub async fn handle_update(
         end,
         description: args.description,
         location: args.location,
+        status: None,
+        attendees: None,
+        reminders: None,
     };
     let config = koyomi_core::calendar::PatchEventConfig::new(calendar, args.id, body)?;
 
