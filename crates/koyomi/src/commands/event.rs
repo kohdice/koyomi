@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 
-use koyomi_core::calendar::EventDateTime;
+use koyomi_core::calendar::{EventDateTime, EventStatus, parse_attendees, parse_reminders};
 
 /// Time period for event listing
 #[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,6 +66,15 @@ pub struct AddArgs {
     /// Event location
     #[arg(long)]
     pub location: Option<String>,
+    /// Event status (confirmed, tentative, cancelled)
+    #[arg(long)]
+    pub status: Option<String>,
+    /// Comma-separated attendee emails (e.g. "a@x.com, b@y.com")
+    #[arg(long)]
+    pub attendees: Option<String>,
+    /// Reminders: "default" or "method:minutes,..." (e.g. "popup:10,email:1440")
+    #[arg(long)]
+    pub reminders: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -87,6 +96,15 @@ pub struct UpdateArgs {
     /// New location
     #[arg(long)]
     pub location: Option<String>,
+    /// New event status (confirmed, tentative, cancelled)
+    #[arg(long)]
+    pub status: Option<String>,
+    /// New comma-separated attendee emails (e.g. "a@x.com, b@y.com")
+    #[arg(long)]
+    pub attendees: Option<String>,
+    /// New reminders: "default" or "method:minutes,..." (e.g. "popup:10,email:1440")
+    #[arg(long)]
+    pub reminders: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -134,15 +152,21 @@ pub async fn handle_add(
     let start = parse_event_datetime(&args.start).map_err(|e| anyhow::anyhow!(e))?;
     let end = parse_event_datetime(&args.end).map_err(|e| anyhow::anyhow!(e))?;
 
+    let status =
+        args.status.map(|s| EventStatus::parse(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
+    let attendees = args.attendees.map(|s| parse_attendees(&s)).unwrap_or_default();
+    let reminders =
+        args.reminders.map(|s| parse_reminders(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
+
     let body = koyomi_core::calendar::InsertEventBody {
         summary: args.summary,
         start,
         end,
         description: args.description,
         location: args.location,
-        status: None,
-        attendees: Vec::new(),
-        reminders: None,
+        status,
+        attendees,
+        reminders,
     };
     let config = koyomi_core::calendar::InsertEventConfig::new(calendar, body)?;
 
@@ -167,15 +191,21 @@ pub async fn handle_update(
     let end =
         args.end.map(|s| parse_event_datetime(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
 
+    let status =
+        args.status.map(|s| EventStatus::parse(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
+    let attendees = args.attendees.map(|s| parse_attendees(&s));
+    let reminders =
+        args.reminders.map(|s| parse_reminders(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
+
     let body = koyomi_core::calendar::PatchEventBody {
         summary: args.summary,
         start,
         end,
         description: args.description,
         location: args.location,
-        status: None,
-        attendees: None,
-        reminders: None,
+        status,
+        attendees,
+        reminders,
     };
     let config = koyomi_core::calendar::PatchEventConfig::new(calendar, args.id, body)?;
 
@@ -508,5 +538,115 @@ mod tests {
     fn parse_event_datetime_rejects_partial_time() {
         let result = parse_event_datetime("2026-02-17T10:00");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_parses_event_add_command_with_new_optional_fields() {
+        let cli = Cli::parse_from([
+            "koyomi",
+            "event",
+            "add",
+            "--summary",
+            "Meeting",
+            "--start",
+            "2026-02-17T10:00:00+09:00",
+            "--end",
+            "2026-02-17T11:00:00+09:00",
+            "--status",
+            "tentative",
+            "--attendees",
+            "a@x.com, b@y.com",
+            "--reminders",
+            "popup:10,email:1440",
+        ]);
+        match cli.command {
+            Some(Commands::Event(event_args)) => match event_args.command {
+                EventCommand::Add(args) => {
+                    assert_eq!(args.status, Some("tentative".to_string()));
+                    assert_eq!(args.attendees, Some("a@x.com, b@y.com".to_string()));
+                    assert_eq!(args.reminders, Some("popup:10,email:1440".to_string()));
+                }
+                _ => panic!("Expected Add subcommand"),
+            },
+            _ => panic!("Expected Event command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_event_add_command_without_new_optional_fields() {
+        let cli = Cli::parse_from([
+            "koyomi",
+            "event",
+            "add",
+            "--summary",
+            "Meeting",
+            "--start",
+            "2026-02-17T10:00:00+09:00",
+            "--end",
+            "2026-02-17T11:00:00+09:00",
+        ]);
+        match cli.command {
+            Some(Commands::Event(event_args)) => match event_args.command {
+                EventCommand::Add(args) => {
+                    assert!(args.status.is_none());
+                    assert!(args.attendees.is_none());
+                    assert!(args.reminders.is_none());
+                }
+                _ => panic!("Expected Add subcommand"),
+            },
+            _ => panic!("Expected Event command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_event_update_command_with_new_optional_fields() {
+        let cli = Cli::parse_from([
+            "koyomi",
+            "event",
+            "update",
+            "event123",
+            "--status",
+            "confirmed",
+            "--attendees",
+            "c@z.com",
+            "--reminders",
+            "default",
+        ]);
+        match cli.command {
+            Some(Commands::Event(event_args)) => match event_args.command {
+                EventCommand::Update(args) => {
+                    assert_eq!(args.id, "event123");
+                    assert_eq!(args.status, Some("confirmed".to_string()));
+                    assert_eq!(args.attendees, Some("c@z.com".to_string()));
+                    assert_eq!(args.reminders, Some("default".to_string()));
+                }
+                _ => panic!("Expected Update subcommand"),
+            },
+            _ => panic!("Expected Event command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_event_update_command_without_new_optional_fields() {
+        let cli = Cli::parse_from([
+            "koyomi",
+            "event",
+            "update",
+            "event123",
+            "--summary",
+            "Updated Title",
+        ]);
+        match cli.command {
+            Some(Commands::Event(event_args)) => match event_args.command {
+                EventCommand::Update(args) => {
+                    assert_eq!(args.id, "event123");
+                    assert!(args.status.is_none());
+                    assert!(args.attendees.is_none());
+                    assert!(args.reminders.is_none());
+                }
+                _ => panic!("Expected Update subcommand"),
+            },
+            _ => panic!("Expected Event command"),
+        }
     }
 }
