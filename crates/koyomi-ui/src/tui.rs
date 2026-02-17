@@ -3,6 +3,7 @@ mod calendar_grid;
 mod event_handler;
 mod message;
 mod model;
+mod text_input;
 mod theme;
 mod update;
 mod view;
