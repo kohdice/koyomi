@@ -25,8 +25,8 @@ pub(super) struct App {
     model: Model,
     terminal: Terminal<CrosstermBackend<Stdout>>,
     client: koyomi_core::Client,
-    token: koyomi_core::StoredToken,
     fetch_in_progress: bool,
+    pending_fetch: Option<(i32, u32)>,
     api_in_progress: bool,
 }
 
@@ -34,7 +34,6 @@ impl App {
     pub(super) fn new(
         terminal: Terminal<CrosstermBackend<Stdout>>,
         client: koyomi_core::Client,
-        token: koyomi_core::StoredToken,
         calendar_id: String,
         tz: koyomi_core::calendar::TimeZone,
     ) -> Self {
@@ -42,8 +41,8 @@ impl App {
             model: Model::new(calendar_id, tz),
             terminal,
             client,
-            token,
             fetch_in_progress: false,
+            pending_fetch: None,
             api_in_progress: false,
         }
     }
@@ -119,8 +118,10 @@ impl App {
 
         while let Some(m) = msg {
             let should_fetch = matches!(&m, Message::RequestEvents);
+            let fetch_completed =
+                matches!(&m, Message::EventsLoaded { .. } | Message::EventsLoadFailed { .. });
 
-            if matches!(&m, Message::EventsLoaded { .. } | Message::EventsLoadFailed { .. }) {
+            if fetch_completed {
                 self.fetch_in_progress = false;
             }
 
@@ -136,13 +137,26 @@ impl App {
 
             msg = update(&mut self.model, m);
 
-            if should_fetch && !self.fetch_in_progress {
+            if fetch_completed
+                && let Some((year, month)) = self.pending_fetch.take()
+                && !self.model.events_cache.contains_key(&(year, month))
+            {
                 self.fetch_in_progress = true;
-                self.spawn_bulk_fetch(
-                    self.model.current_year,
-                    self.model.current_month,
-                    tx.clone(),
-                );
+                self.spawn_bulk_fetch(year, month, tx.clone());
+            }
+
+            if should_fetch {
+                if !self.fetch_in_progress {
+                    self.fetch_in_progress = true;
+                    self.pending_fetch = None;
+                    self.spawn_bulk_fetch(
+                        self.model.current_year,
+                        self.model.current_month,
+                        tx.clone(),
+                    );
+                } else {
+                    self.pending_fetch = Some((self.model.current_year, self.model.current_month));
+                }
             }
 
             if let Some(action) = self.model.pending_action.take()
@@ -171,7 +185,6 @@ impl App {
         tx: mpsc::UnboundedSender<Message>,
     ) {
         let client = self.client.clone();
-        let token = self.token.clone();
         let calendar_id = self.model.calendar_id.clone();
         let tz = self.model.tz;
         let (start_year, start_month) = prefetch_range(center_year, center_month);
@@ -182,6 +195,14 @@ impl App {
         );
 
         tokio::spawn(async move {
+            let token = match koyomi_core::get_valid_token(&client).await {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = tx.send(Message::EventsLoadFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
             let (time_min, time_max) = match koyomi_core::calendar::time_range::for_month_range(
                 start_year,
                 start_month,
@@ -241,12 +262,19 @@ impl App {
 
     fn spawn_delete_event(&self, event_id: String, tx: mpsc::UnboundedSender<Message>) {
         let client = self.client.clone();
-        let token = self.token.clone();
         let calendar_id = self.model.calendar_id.clone();
 
         debug!("Spawning delete event: {event_id}");
 
         tokio::spawn(async move {
+            let token = match koyomi_core::get_valid_token(&client).await {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = tx.send(Message::DeleteFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
             let config = match koyomi_core::calendar::DeleteEventConfig::new(calendar_id, event_id)
             {
                 Ok(c) => c,
@@ -273,12 +301,19 @@ impl App {
         tx: mpsc::UnboundedSender<Message>,
     ) {
         let client = self.client.clone();
-        let token = self.token.clone();
         let calendar_id = self.model.calendar_id.clone();
 
         debug!("Spawning insert event: {}", body.summary);
 
         tokio::spawn(async move {
+            let token = match koyomi_core::get_valid_token(&client).await {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
             let config = match koyomi_core::calendar::InsertEventConfig::new(calendar_id, body) {
                 Ok(c) => c,
                 Err(e) => {
@@ -305,12 +340,19 @@ impl App {
         tx: mpsc::UnboundedSender<Message>,
     ) {
         let client = self.client.clone();
-        let token = self.token.clone();
         let calendar_id = self.model.calendar_id.clone();
 
         debug!("Spawning patch event: {event_id}");
 
         tokio::spawn(async move {
+            let token = match koyomi_core::get_valid_token(&client).await {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = tx.send(Message::SaveFailed { error: format!("{e:#}") });
+                    return;
+                }
+            };
+
             let config =
                 match koyomi_core::calendar::PatchEventConfig::new(calendar_id, event_id, body) {
                     Ok(c) => c,

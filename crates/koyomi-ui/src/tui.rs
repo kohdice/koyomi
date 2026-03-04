@@ -30,7 +30,6 @@ use self::app::App;
 /// - Terminal restoration fails
 pub async fn run(
     client: koyomi_core::Client,
-    token: koyomi_core::StoredToken,
     calendar_id: String,
     tz: koyomi_core::calendar::TimeZone,
 ) -> anyhow::Result<()> {
@@ -42,7 +41,7 @@ pub async fn run(
     let result = async {
         let backend = CrosstermBackend::new(stdout());
         let terminal = Terminal::new(backend)?;
-        App::new(terminal, client, token, calendar_id, tz).run().await
+        App::new(terminal, client, calendar_id, tz).run().await
     }
     .await;
 

@@ -39,8 +39,8 @@ pub async fn run() -> Result<()> {
 
     match cli.command {
         None => {
-            let token = koyomi_core::get_valid_token(&client).await?;
-            koyomi_ui::tui::run(client, token, cli.calendar, tz).await?;
+            koyomi_core::get_valid_token(&client).await?;
+            koyomi_ui::tui::run(client, cli.calendar, tz).await?;
             Ok(())
         }
         Some(Commands::Login) => commands::login::handle(&client, cli.quiet).await,
