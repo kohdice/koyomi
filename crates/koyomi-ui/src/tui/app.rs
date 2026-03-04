@@ -107,6 +107,10 @@ impl App {
                 Some(msg) = msg_rx.recv() => {
                     self.handle_message_chain(msg, &msg_tx);
                 }
+                else => {
+                    tracing::warn!("All event channels closed; exiting main loop");
+                    break;
+                }
             }
         }
 
@@ -159,8 +163,8 @@ impl App {
                 }
             }
 
-            if let Some(action) = self.model.pending_action.take()
-                && !self.api_in_progress
+            if !self.api_in_progress
+                && let Some(action) = self.model.pending_action.take()
             {
                 self.api_in_progress = true;
                 match action {
