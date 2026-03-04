@@ -5,6 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
   outputs =
@@ -13,6 +14,7 @@
       nixpkgs,
       flake-utils,
       rust-overlay,
+      treefmt-nix,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -30,6 +32,14 @@
             "clippy"
           ];
         };
+        treefmtEval = treefmt-nix.lib.evalModule pkgs {
+          projectRootFile = "flake.nix";
+          programs.nixfmt.enable = true;
+          programs.rustfmt = {
+            enable = true;
+            package = rust;
+          };
+        };
       in
       {
         devShells.default = pkgs.mkShell {
@@ -41,7 +51,7 @@
           ];
         };
 
-        formatter = pkgs.nixfmt-rfc-style;
+        formatter = treefmtEval.config.build.wrapper;
       }
     );
 }
