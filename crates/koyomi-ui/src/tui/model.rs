@@ -129,6 +129,8 @@ pub(super) struct EventFormState {
     pub(super) focused_field: FormField,
     pub(super) validation_error: Option<String>,
     pub(super) reminder_preset_index: usize,
+    pub(super) reminder_changed: bool,
+    pub(super) initial_attendees: String,
 }
 
 #[derive(Debug, Clone)]

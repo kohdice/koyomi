@@ -180,6 +180,8 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                 focused_field: FormField::Summary,
                 validation_error: None,
                 reminder_preset_index: DEFAULT_REMINDER_PRESET_INDEX,
+                reminder_changed: false,
+                initial_attendees: String::new(),
             });
             None
         }
@@ -224,6 +226,8 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                     focused_field: FormField::Summary,
                     validation_error: None,
                     reminder_preset_index: preset_idx,
+                    reminder_changed: false,
+                    initial_attendees: attendees_str.clone(),
                 });
             }
             None
@@ -355,8 +359,9 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                         model.pending_action = Some(PendingAction::Insert { body });
                     }
                     FormMode::Edit { event_id } => {
-                        let attendees_opt =
-                            if attendees_str.is_empty() { None } else { Some(attendees) };
+                        let attendees_changed = attendees_str != form.initial_attendees;
+                        let attendees_opt = if attendees_changed { Some(attendees) } else { None };
+                        let edit_reminders = if form.reminder_changed { reminders } else { None };
                         let body = koyomi_core::calendar::PatchEventBody {
                             summary: Some(summary),
                             start: Some(start),
@@ -365,7 +370,7 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                             location: loc,
                             status,
                             attendees: attendees_opt,
-                            reminders,
+                            reminders: edit_reminders,
                         };
                         model.pending_action =
                             Some(PendingAction::Patch { event_id: event_id.clone(), body });
@@ -381,6 +386,7 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                 let len = REMINDER_PRESETS.len();
                 form.reminder_preset_index = (form.reminder_preset_index + 1) % len;
                 form.fields[7] = TextInput::new(REMINDER_PRESETS[form.reminder_preset_index].label);
+                form.reminder_changed = true;
             }
             None
         }
@@ -389,6 +395,7 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                 let len = REMINDER_PRESETS.len();
                 form.reminder_preset_index = (form.reminder_preset_index + len - 1) % len;
                 form.fields[7] = TextInput::new(REMINDER_PRESETS[form.reminder_preset_index].label);
+                form.reminder_changed = true;
             }
             None
         }
@@ -884,5 +891,193 @@ mod tests {
         let result = update(&mut model, Message::RefreshEvents);
         assert!(model.is_current_month_loading());
         assert!(matches!(result, Some(Message::RequestEvents)));
+    }
+
+    #[test]
+    fn edit_form_reminder_unchanged_sends_none() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: Vec::new(),
+                reminders: Some(koyomi_core::calendar::Reminders {
+                    use_default: false,
+                    overrides: vec![koyomi_core::calendar::ReminderOverride {
+                        method: koyomi_core::calendar::ReminderMethod::Popup,
+                        minutes: 10,
+                    }],
+                }),
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(&mut model, Message::OpenEditForm);
+        // Do NOT change reminders
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.reminders.is_none())
+        );
+    }
+
+    #[test]
+    fn edit_form_reminder_changed_sends_some() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: Vec::new(),
+                reminders: Some(koyomi_core::calendar::Reminders {
+                    use_default: false,
+                    overrides: vec![koyomi_core::calendar::ReminderOverride {
+                        method: koyomi_core::calendar::ReminderMethod::Popup,
+                        minutes: 10,
+                    }],
+                }),
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(&mut model, Message::OpenEditForm);
+        update(&mut model, Message::FormReminderNext);
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.reminders.is_some())
+        );
+    }
+
+    #[test]
+    fn edit_form_attendees_cleared_sends_empty_vec() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: vec![koyomi_core::calendar::Attendee {
+                    email: Some("a@x.com".to_string()),
+                    display_name: None,
+                    response_status: None,
+                    resource: false,
+                }],
+                reminders: None,
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(&mut model, Message::OpenEditForm);
+        // Clear attendees field via backspace
+        let form = model.event_form.as_mut().unwrap();
+        form.focused_field = FormField::Attendees;
+        let field_len = form.fields[6].content().len();
+        for _ in 0..field_len {
+            update(&mut model, Message::FormBackspace);
+        }
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.attendees.as_ref().is_some_and(|a| a.is_empty()))
+        );
+    }
+
+    #[test]
+    fn edit_form_attendees_unchanged_sends_none() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: vec![koyomi_core::calendar::Attendee {
+                    email: Some("a@x.com".to_string()),
+                    display_name: None,
+                    response_status: None,
+                    resource: false,
+                }],
+                reminders: None,
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(&mut model, Message::OpenEditForm);
+        // Do NOT change attendees
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.attendees.is_none())
+        );
+    }
+
+    #[test]
+    fn edit_form_empty_attendees_unchanged_sends_none() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: Vec::new(),
+                reminders: None,
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(&mut model, Message::OpenEditForm);
+        // Do NOT change attendees (initially empty)
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.attendees.is_none())
+        );
     }
 }
