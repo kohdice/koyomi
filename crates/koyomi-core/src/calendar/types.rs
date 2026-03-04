@@ -262,8 +262,10 @@ pub fn parse_attendees(s: &str) -> Vec<Attendee> {
     }
     trimmed
         .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .map(|email| Attendee {
-            email: Some(email.trim().to_string()),
+            email: Some(email.to_string()),
             display_name: None,
             response_status: None,
             resource: false,
@@ -922,6 +924,34 @@ mod tests {
         assert_eq!(attendees.len(), 2);
         assert_eq!(attendees[0].email, Some("a@x.com".to_string()));
         assert_eq!(attendees[1].email, Some("b@y.com".to_string()));
+    }
+
+    #[test]
+    fn parse_attendees_trailing_comma() {
+        let attendees = parse_attendees("a@example.com,");
+        assert_eq!(attendees.len(), 1);
+        assert_eq!(attendees[0].email, Some("a@example.com".to_string()));
+    }
+
+    #[test]
+    fn parse_attendees_leading_comma() {
+        let attendees = parse_attendees(",a@example.com");
+        assert_eq!(attendees.len(), 1);
+        assert_eq!(attendees[0].email, Some("a@example.com".to_string()));
+    }
+
+    #[test]
+    fn parse_attendees_consecutive_commas() {
+        let attendees = parse_attendees("a@example.com,,,b@example.com");
+        assert_eq!(attendees.len(), 2);
+        assert_eq!(attendees[0].email, Some("a@example.com".to_string()));
+        assert_eq!(attendees[1].email, Some("b@example.com".to_string()));
+    }
+
+    #[test]
+    fn parse_attendees_only_commas() {
+        let attendees = parse_attendees(",,,");
+        assert!(attendees.is_empty());
     }
 
     // --- parse_reminders tests ---
