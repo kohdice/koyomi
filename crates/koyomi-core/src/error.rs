@@ -73,6 +73,12 @@ pub enum Error {
     #[error("Token not found. Please run 'koyomi login' to authenticate first.")]
     TokenNotFound,
 
+    #[error(
+        "Insufficient token scope. \
+         Please run 'koyomi logout' then 'koyomi login' to re-authenticate with write access."
+    )]
+    InsufficientScope,
+
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
@@ -121,6 +127,15 @@ mod tests {
         assert!(matches!(auth_error, Error::Auth(_)));
         assert!(matches!(token_not_found, Error::TokenNotFound));
         assert!(!matches!(token_not_found, Error::Auth(_)));
+    }
+
+    #[test]
+    fn insufficient_scope_is_distinct_variant() {
+        let error = Error::InsufficientScope;
+        assert!(matches!(error, Error::InsufficientScope));
+        assert!(!matches!(error, Error::Auth(_)));
+        assert!(error.to_string().contains("Insufficient token scope"));
+        assert!(error.to_string().contains("koyomi logout"));
     }
 
     #[test]

@@ -143,6 +143,10 @@ pub async fn get_valid_token(client: &crate::client::Client) -> Result<token::St
     let token_path = token::path()?;
     let mut stored_token = token::load(&token_path)?;
 
+    if !stored_token.has_scope("https://www.googleapis.com/auth/calendar") {
+        return Err(Error::InsufficientScope);
+    }
+
     let buffer = chrono::TimeDelta::minutes(TOKEN_REFRESH_BUFFER_MINUTES);
     if stored_token.is_expired(buffer) {
         debug!("Token expired or expiring soon, refreshing");

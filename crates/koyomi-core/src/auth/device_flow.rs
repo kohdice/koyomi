@@ -4,7 +4,7 @@ use crate::{Error, Result};
 
 pub(super) const DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/code";
 pub(super) const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPES: &str = "https://www.googleapis.com/auth/calendar";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// POST /device/code request body

@@ -68,6 +68,11 @@ impl StoredToken {
     }
 
     #[must_use]
+    pub fn has_scope(&self, required: &str) -> bool {
+        self.scope.iter().any(|s| s == required)
+    }
+
+    #[must_use]
     pub fn is_expired(&self, buffer: chrono::TimeDelta) -> bool {
         Utc::now() + buffer >= self.expires_at
     }
@@ -403,5 +408,32 @@ mod tests {
             obtained_at: now,
         };
         assert_eq!(token.refresh_token(), None);
+    }
+
+    #[test]
+    fn has_scope_returns_true_for_matching_scope() {
+        let token = StoredToken::from_response(
+            "access".to_string(),
+            Some("refresh".to_string()),
+            "Bearer".to_string(),
+            "https://www.googleapis.com/auth/calendar openid",
+            3600,
+        )
+        .unwrap();
+        assert!(token.has_scope("https://www.googleapis.com/auth/calendar"));
+        assert!(token.has_scope("openid"));
+    }
+
+    #[test]
+    fn has_scope_returns_false_for_non_matching_scope() {
+        let token = StoredToken::from_response(
+            "access".to_string(),
+            Some("refresh".to_string()),
+            "Bearer".to_string(),
+            "https://www.googleapis.com/auth/calendar.readonly",
+            3600,
+        )
+        .unwrap();
+        assert!(!token.has_scope("https://www.googleapis.com/auth/calendar"));
     }
 }
