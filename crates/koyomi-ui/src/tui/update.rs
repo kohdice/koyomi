@@ -1,5 +1,5 @@
 use chrono::{Datelike, NaiveDate, TimeDelta};
-use koyomi_core::calendar::{EventDateTime, EventStatus, parse_attendees};
+use koyomi_core::calendar::{EventDateTime, EventStatus, Patch, parse_attendees};
 
 use super::calendar_grid;
 use super::message::Message;
@@ -182,6 +182,9 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                 reminder_preset_index: DEFAULT_REMINDER_PRESET_INDEX,
                 reminder_changed: false,
                 initial_attendees: String::new(),
+                initial_description: String::new(),
+                initial_location: String::new(),
+                initial_status: String::new(),
             });
             None
         }
@@ -227,7 +230,10 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                     validation_error: None,
                     reminder_preset_index: preset_idx,
                     reminder_changed: false,
-                    initial_attendees: attendees_str.clone(),
+                    initial_attendees: attendees_str.trim().to_string(),
+                    initial_description: description.trim().to_string(),
+                    initial_location: location.trim().to_string(),
+                    initial_status: status_str.trim().to_string(),
                 });
             }
             None
@@ -325,27 +331,25 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                     }
                 };
 
-                let desc = if description.is_empty() { None } else { Some(description) };
-                let loc = if location.is_empty() { None } else { Some(location) };
-
-                let status = if status_str.is_empty() {
-                    None
-                } else {
-                    match EventStatus::parse(&status_str) {
-                        Ok(s) => Some(s),
-                        Err(e) => {
-                            form.validation_error = Some(e);
-                            return None;
-                        }
-                    }
-                };
-
                 let attendees = parse_attendees(&attendees_str);
-
                 let reminders = REMINDER_PRESETS[form.reminder_preset_index].to_reminders();
 
                 match &form.mode {
                     FormMode::Add => {
+                        let desc = if description.is_empty() { None } else { Some(description) };
+                        let loc = if location.is_empty() { None } else { Some(location) };
+                        let status = if status_str.is_empty() {
+                            None
+                        } else {
+                            match EventStatus::parse(&status_str) {
+                                Ok(s) => Some(s),
+                                Err(e) => {
+                                    form.validation_error = Some(e);
+                                    return None;
+                                }
+                            }
+                        };
+
                         let body = koyomi_core::calendar::InsertEventBody {
                             summary,
                             start,
@@ -359,6 +363,33 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                         model.pending_action = Some(PendingAction::Insert { body });
                     }
                     FormMode::Edit { event_id } => {
+                        let desc_patch = if description == form.initial_description {
+                            Patch::Unchanged
+                        } else if description.is_empty() {
+                            Patch::Clear
+                        } else {
+                            Patch::Set(description)
+                        };
+                        let loc_patch = if location == form.initial_location {
+                            Patch::Unchanged
+                        } else if location.is_empty() {
+                            Patch::Clear
+                        } else {
+                            Patch::Set(location)
+                        };
+                        let status_opt =
+                            if status_str == form.initial_status || status_str.is_empty() {
+                                None
+                            } else {
+                                match EventStatus::parse(&status_str) {
+                                    Ok(s) => Some(s),
+                                    Err(e) => {
+                                        form.validation_error = Some(e);
+                                        return None;
+                                    }
+                                }
+                            };
+
                         let attendees_changed = attendees_str != form.initial_attendees;
                         let attendees_opt = if attendees_changed { Some(attendees) } else { None };
                         let edit_reminders = if form.reminder_changed { reminders } else { None };
@@ -366,9 +397,9 @@ pub(super) fn update(model: &mut Model, msg: Message) -> Option<Message> {
                             summary: Some(summary),
                             start: Some(start),
                             end: Some(end),
-                            description: desc,
-                            location: loc,
-                            status,
+                            description: desc_patch,
+                            location: loc_patch,
+                            status: status_opt,
                             attendees: attendees_opt,
                             reminders: edit_reminders,
                         };
@@ -1078,6 +1109,159 @@ mod tests {
         let action = model.pending_action.take();
         assert!(
             matches!(action, Some(PendingAction::Patch { body, .. }) if body.attendees.is_none())
+        );
+    }
+
+    // --- Patch tri-state edit form tests ---
+
+    fn make_edit_event(date: NaiveDate) -> koyomi_core::calendar::Event {
+        koyomi_core::calendar::Event {
+            id: Some("evt1".to_string()),
+            summary: Some("Test".to_string()),
+            status: Some(koyomi_core::calendar::EventStatus::Confirmed),
+            organizer: None,
+            location: Some("Room A".to_string()),
+            start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+            end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+            description: Some("Original desc".to_string()),
+            attendees: Vec::new(),
+            reminders: None,
+            conference_data: None,
+            html_link: None,
+        }
+    }
+
+    fn setup_edit_form(model: &mut Model) {
+        model.event_modal_open = true;
+        model.focus = Focus::EventList;
+        update(model, Message::OpenEditForm);
+    }
+
+    fn clear_field(model: &mut Model, field: FormField) {
+        let form = model.event_form.as_mut().unwrap();
+        form.focused_field = field;
+        let idx = field_index(&field);
+        let len = form.fields[idx].content().len();
+        for _ in 0..len {
+            update(model, Message::FormBackspace);
+        }
+    }
+
+    fn type_into_field(model: &mut Model, field: FormField, text: &str) {
+        let form = model.event_form.as_mut().unwrap();
+        form.focused_field = field;
+        for ch in text.chars() {
+            update(model, Message::FormInput { ch });
+        }
+    }
+
+    #[test]
+    fn edit_form_description_cleared_sends_patch_clear() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_edit_event(date)]);
+        setup_edit_form(&mut model);
+        clear_field(&mut model, FormField::Description);
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if matches!(body.description, koyomi_core::calendar::Patch::Clear))
+        );
+    }
+
+    #[test]
+    fn edit_form_description_unchanged_sends_patch_unchanged() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_edit_event(date)]);
+        setup_edit_form(&mut model);
+        // Do NOT change description
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.description.is_unchanged())
+        );
+    }
+
+    #[test]
+    fn edit_form_description_changed_sends_patch_set() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_edit_event(date)]);
+        setup_edit_form(&mut model);
+        clear_field(&mut model, FormField::Description);
+        type_into_field(&mut model, FormField::Description, "New desc");
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if matches!(body.description, koyomi_core::calendar::Patch::Set(ref s) if s == "New desc"))
+        );
+    }
+
+    #[test]
+    fn edit_form_location_cleared_sends_patch_clear() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_edit_event(date)]);
+        setup_edit_form(&mut model);
+        clear_field(&mut model, FormField::Location);
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if matches!(body.location, koyomi_core::calendar::Patch::Clear))
+        );
+    }
+
+    #[test]
+    fn edit_form_status_cleared_sends_none() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        model
+            .events_cache
+            .insert((model.current_year, model.current_month), vec![make_edit_event(date)]);
+        setup_edit_form(&mut model);
+        clear_field(&mut model, FormField::Status);
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(matches!(action, Some(PendingAction::Patch { body, .. }) if body.status.is_none()));
+    }
+
+    #[test]
+    fn edit_form_empty_description_unchanged_sends_patch_unchanged() {
+        let mut model = default_model();
+        let date = model.selected_date;
+        // Event with no description (originally empty)
+        model.events_cache.insert(
+            (model.current_year, model.current_month),
+            vec![koyomi_core::calendar::Event {
+                id: Some("evt1".to_string()),
+                summary: Some("Test".to_string()),
+                status: None,
+                organizer: None,
+                location: None,
+                start: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                end: Some(koyomi_core::calendar::EventDateTime::Date { date }),
+                description: None,
+                attendees: Vec::new(),
+                reminders: None,
+                conference_data: None,
+                html_link: None,
+            }],
+        );
+        setup_edit_form(&mut model);
+        // Do NOT change description (initially empty → still empty)
+        update(&mut model, Message::FormSubmit);
+        let action = model.pending_action.take();
+        assert!(
+            matches!(action, Some(PendingAction::Patch { body, .. }) if body.description.is_unchanged())
         );
     }
 }

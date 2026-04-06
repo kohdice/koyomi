@@ -131,6 +131,9 @@ pub(super) struct EventFormState {
     pub(super) reminder_preset_index: usize,
     pub(super) reminder_changed: bool,
     pub(super) initial_attendees: String,
+    pub(super) initial_description: String,
+    pub(super) initial_location: String,
+    pub(super) initial_status: String,
 }
 
 #[derive(Debug, Clone)]

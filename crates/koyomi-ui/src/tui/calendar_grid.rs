@@ -32,9 +32,7 @@ pub fn build_month_grid(year: i32, month: u32) -> Vec<[Option<NaiveDate>; 7]> {
 /// Extract a `NaiveDate` from an `EventDateTime`, converting to the given timezone.
 pub fn event_date(edt: &EventDateTime, tz: koyomi_core::calendar::TimeZone) -> NaiveDate {
     match edt {
-        EventDateTime::DateTime { date_time, .. } => {
-            date_time.with_timezone(&tz.fixed_offset()).date_naive()
-        }
+        EventDateTime::DateTime { date_time, .. } => tz.convert_datetime(date_time).date_naive(),
         EventDateTime::Date { date } => *date,
     }
 }
@@ -52,7 +50,7 @@ pub fn events_for_date(
 pub fn format_event_time(event: &Event, tz: koyomi_core::calendar::TimeZone) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            let local = date_time.with_timezone(&tz.fixed_offset());
+            let local = tz.convert_datetime(date_time);
             format!("{}", local.format("%H:%M"))
         }
         Some(EventDateTime::Date { .. }) => "All day".to_string(),
@@ -67,7 +65,7 @@ pub fn format_event_time(event: &Event, tz: koyomi_core::calendar::TimeZone) -> 
 pub fn format_event_time_compact(event: &Event, tz: koyomi_core::calendar::TimeZone) -> String {
     match &event.start {
         Some(EventDateTime::DateTime { date_time, .. }) => {
-            let local = date_time.with_timezone(&tz.fixed_offset());
+            let local = tz.convert_datetime(date_time);
             format!("{}:", local.format("%H"))
         }
         Some(EventDateTime::Date { .. }) => "00:".to_string(),
@@ -261,5 +259,47 @@ mod tests {
         use koyomi_core::calendar::TimeZone;
         let event = test_event(None, None);
         assert_eq!(format_event_time(&event, TimeZone::Jst), "");
+    }
+
+    #[test]
+    fn event_date_dst_transition_consistency() {
+        use koyomi_core::calendar::TimeZone;
+        // Two events: one in winter, one in summer — both at UTC midnight
+        let winter_edt = EventDateTime::DateTime {
+            date_time: chrono::DateTime::parse_from_rfc3339("2026-01-15T00:00:00+00:00").unwrap(),
+            time_zone: None,
+        };
+        let summer_edt = EventDateTime::DateTime {
+            date_time: chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00+00:00").unwrap(),
+            time_zone: None,
+        };
+
+        // JST is UTC+9 (no DST), so both should be on the same date as UTC midnight + 9h
+        let winter_date = event_date(&winter_edt, TimeZone::Jst);
+        let summer_date = event_date(&summer_edt, TimeZone::Jst);
+        assert_eq!(winter_date, NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+        assert_eq!(summer_date, NaiveDate::from_ymd_opt(2026, 7, 15).unwrap());
+
+        // UTC should keep the same date
+        let winter_utc = event_date(&winter_edt, TimeZone::Utc);
+        let summer_utc = event_date(&summer_edt, TimeZone::Utc);
+        assert_eq!(winter_utc, NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+        assert_eq!(summer_utc, NaiveDate::from_ymd_opt(2026, 7, 15).unwrap());
+    }
+
+    #[test]
+    fn format_event_time_preserves_instant_across_timezones() {
+        use koyomi_core::calendar::TimeZone;
+        // 2026-02-16T01:00:00+00:00 UTC = 2026-02-16T10:00:00+09:00 JST
+        let event = test_event(
+            Some(EventDateTime::DateTime {
+                date_time: chrono::DateTime::parse_from_rfc3339("2026-02-16T01:00:00+00:00")
+                    .unwrap(),
+                time_zone: None,
+            }),
+            Some("Cross-TZ"),
+        );
+        assert_eq!(format_event_time(&event, TimeZone::Utc), "01:00");
+        assert_eq!(format_event_time(&event, TimeZone::Jst), "10:00");
     }
 }

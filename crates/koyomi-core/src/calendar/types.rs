@@ -334,6 +334,60 @@ pub struct InsertEventBody {
     pub reminders: Option<Reminders>,
 }
 
+/// Tri-state wrapper for PATCH fields that distinguishes "unchanged",
+/// "set to a value", and "clear (send null)".
+///
+/// Google Calendar PATCH semantics:
+/// - Field absent → no change (`Unchanged`)
+/// - Field is `null` → clear the value (`Clear`)
+/// - Field has a value → update (`Set`)
+#[derive(Debug, Clone, Default)]
+pub enum Patch<T> {
+    /// Do not include this field in the request body.
+    #[default]
+    Unchanged,
+    /// Set the field to the given value.
+    Set(T),
+    /// Send `null` to clear the field.
+    Clear,
+}
+
+impl<T> Patch<T> {
+    #[must_use]
+    pub fn is_unchanged(&self) -> bool {
+        matches!(self, Patch::Unchanged)
+    }
+}
+
+impl Patch<String> {
+    /// Convert an `Option<String>` from CLI arguments into a `Patch`.
+    ///
+    /// - `None` → `Unchanged` (argument not provided)
+    /// - `Some("")` → `Clear` (explicitly set to empty)
+    /// - `Some(value)` → `Set(value)`
+    #[must_use]
+    pub fn from_option(opt: Option<String>) -> Self {
+        match opt {
+            None => Patch::Unchanged,
+            Some(s) if s.is_empty() => Patch::Clear,
+            Some(s) => Patch::Set(s),
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for Patch<T> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Patch::Unchanged => unreachable!("Unchanged should be skipped by skip_serializing_if"),
+            Patch::Set(value) => value.serialize(serializer),
+            Patch::Clear => serializer.serialize_none(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PatchEventBody {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,10 +396,10 @@ pub struct PatchEventBody {
     pub start: Option<EventDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<EventDateTime>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Patch::is_unchanged")]
+    pub description: Patch<String>,
+    #[serde(skip_serializing_if = "Patch::is_unchanged")]
+    pub location: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<EventStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,8 +414,8 @@ impl PatchEventBody {
         self.summary.is_some()
             || self.start.is_some()
             || self.end.is_some()
-            || self.description.is_some()
-            || self.location.is_some()
+            || !self.description.is_unchanged()
+            || !self.location.is_unchanged()
             || self.status.is_some()
             || self.attendees.is_some()
             || self.reminders.is_some()
@@ -839,8 +893,11 @@ mod tests {
         assert!(with_summary.has_fields());
 
         let with_location =
-            PatchEventBody { location: Some("Room".to_string()), ..Default::default() };
+            PatchEventBody { location: Patch::Set("Room".to_string()), ..Default::default() };
         assert!(with_location.has_fields());
+
+        let with_location_clear = PatchEventBody { location: Patch::Clear, ..Default::default() };
+        assert!(with_location_clear.has_fields());
 
         let with_status =
             PatchEventBody { status: Some(EventStatus::Tentative), ..Default::default() };
@@ -1014,5 +1071,69 @@ mod tests {
         let result = parse_reminders("popup:abc");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("invalid minutes"));
+    }
+
+    // --- Patch<T> serialization tests ---
+
+    #[test]
+    fn patch_default_is_unchanged() {
+        let p: Patch<String> = Patch::default();
+        assert!(p.is_unchanged());
+    }
+
+    #[test]
+    fn patch_unchanged_is_skipped() {
+        let body = PatchEventBody { description: Patch::Unchanged, ..Default::default() };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json.get("description").is_none());
+    }
+
+    #[test]
+    fn patch_set_serializes_value() {
+        let body =
+            PatchEventBody { description: Patch::Set("Hello".to_string()), ..Default::default() };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["description"], "Hello");
+    }
+
+    #[test]
+    fn patch_clear_serializes_as_null() {
+        let body = PatchEventBody { description: Patch::Clear, ..Default::default() };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json.get("description").is_some());
+        assert!(json["description"].is_null());
+    }
+
+    #[test]
+    fn patch_mixed_states_serialize_correctly() {
+        let body = PatchEventBody {
+            summary: Some("Meeting".to_string()),
+            description: Patch::Set("Notes".to_string()),
+            location: Patch::Clear,
+            status: None,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["summary"], "Meeting");
+        assert_eq!(json["description"], "Notes");
+        assert!(json["location"].is_null());
+        assert!(json.get("status").is_none());
+    }
+
+    #[test]
+    fn patch_has_fields_detects_clear() {
+        let body = PatchEventBody { description: Patch::Clear, ..Default::default() };
+        assert!(body.has_fields());
+    }
+
+    #[test]
+    fn patch_has_fields_ignores_unchanged() {
+        let body = PatchEventBody {
+            description: Patch::Unchanged,
+            location: Patch::Unchanged,
+            status: None,
+            ..Default::default()
+        };
+        assert!(!body.has_fields());
     }
 }

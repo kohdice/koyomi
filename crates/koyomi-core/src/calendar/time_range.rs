@@ -19,12 +19,31 @@ pub enum TimeZone {
 
 impl TimeZone {
     /// Return the fixed UTC offset for this timezone.
+    ///
+    /// **Caution:** For `Local`, this captures the offset at the *current moment*.
+    /// If the system timezone observes DST, the returned offset may not match
+    /// the offset at an arbitrary event timestamp. Prefer [`convert_datetime`]
+    /// for converting event times.
+    ///
+    /// [`convert_datetime`]: TimeZone::convert_datetime
     #[must_use]
     pub fn fixed_offset(self) -> FixedOffset {
         match self {
             Self::Local => *Local::now().offset(),
             Self::Jst => FixedOffset::east_opt(9 * 3600).expect("JST offset is always valid"),
             Self::Utc => FixedOffset::east_opt(0).expect("UTC offset is always valid"),
+        }
+    }
+
+    /// Convert a `DateTime<FixedOffset>` to the local representation in this timezone.
+    ///
+    /// For `Local`, uses `chrono::Local` which resolves DST at the target timestamp.
+    /// For `Jst`/`Utc`, delegates to the fixed offset (no DST).
+    #[must_use]
+    pub fn convert_datetime(self, dt: &DateTime<FixedOffset>) -> DateTime<FixedOffset> {
+        match self {
+            Self::Local => dt.with_timezone(&Local).fixed_offset(),
+            _ => dt.with_timezone(&self.fixed_offset()),
         }
     }
 
@@ -114,6 +133,8 @@ pub fn for_month_range(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Timelike;
+
     use super::*;
 
     #[test]
@@ -217,6 +238,47 @@ mod tests {
         let (jst_start, _) = for_day(base, TimeZone::Jst).unwrap();
         let (utc_start, _) = for_day(base, TimeZone::Utc).unwrap();
         assert_eq!((utc_start - jst_start).num_hours(), 9);
+    }
+
+    #[test]
+    fn convert_datetime_jst_preserves_offset() {
+        let dt = DateTime::parse_from_rfc3339("2026-07-15T12:00:00+00:00").unwrap();
+        let converted = TimeZone::Jst.convert_datetime(&dt);
+        assert_eq!(converted.offset().local_minus_utc(), 9 * 3600);
+        assert_eq!(converted.hour(), 21);
+    }
+
+    #[test]
+    fn convert_datetime_utc_returns_zero_offset() {
+        let dt = DateTime::parse_from_rfc3339("2026-07-15T12:00:00+09:00").unwrap();
+        let converted = TimeZone::Utc.convert_datetime(&dt);
+        assert_eq!(converted.offset().local_minus_utc(), 0);
+        assert_eq!(converted.hour(), 3);
+    }
+
+    #[test]
+    fn convert_datetime_preserves_instant() {
+        let dt = DateTime::parse_from_rfc3339("2026-03-08T07:30:00+00:00").unwrap();
+
+        let jst = TimeZone::Jst.convert_datetime(&dt);
+        let utc = TimeZone::Utc.convert_datetime(&dt);
+        let local = TimeZone::Local.convert_datetime(&dt);
+
+        assert_eq!(jst.to_utc(), dt.to_utc());
+        assert_eq!(utc.to_utc(), dt.to_utc());
+        assert_eq!(local.to_utc(), dt.to_utc());
+    }
+
+    #[test]
+    fn convert_datetime_local_preserves_instant_across_seasons() {
+        let winter = DateTime::parse_from_rfc3339("2026-01-15T12:00:00+00:00").unwrap();
+        let summer = DateTime::parse_from_rfc3339("2026-07-15T12:00:00+00:00").unwrap();
+
+        let winter_local = TimeZone::Local.convert_datetime(&winter);
+        let summer_local = TimeZone::Local.convert_datetime(&summer);
+
+        assert_eq!(winter_local.to_utc(), winter.to_utc());
+        assert_eq!(summer_local.to_utc(), summer.to_utc());
     }
 
     #[test]

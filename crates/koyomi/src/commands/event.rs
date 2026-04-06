@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 
-use koyomi_core::calendar::{EventDateTime, EventStatus, parse_attendees, parse_reminders};
+use koyomi_core::calendar::{EventDateTime, EventStatus, Patch, parse_attendees, parse_reminders};
 
 /// Time period for event listing
 #[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -191,8 +191,16 @@ pub async fn handle_update(
     let end =
         args.end.map(|s| parse_event_datetime(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
 
-    let status =
-        args.status.map(|s| EventStatus::parse(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
+    let status = match args.status {
+        None => None,
+        Some(s) if s.is_empty() => {
+            anyhow::bail!("status cannot be cleared; use 'confirmed', 'tentative', or 'cancelled'");
+        }
+        Some(s) => {
+            let parsed = EventStatus::parse(&s).map_err(|e| anyhow::anyhow!(e))?;
+            Some(parsed)
+        }
+    };
     let attendees = args.attendees.map(|s| parse_attendees(&s));
     let reminders =
         args.reminders.map(|s| parse_reminders(&s)).transpose().map_err(|e| anyhow::anyhow!(e))?;
@@ -201,8 +209,8 @@ pub async fn handle_update(
         summary: args.summary,
         start,
         end,
-        description: args.description,
-        location: args.location,
+        description: Patch::from_option(args.description),
+        location: Patch::from_option(args.location),
         status,
         attendees,
         reminders,
